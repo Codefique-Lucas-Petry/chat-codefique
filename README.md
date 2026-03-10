@@ -1,0 +1,1 @@
+Projeto realizado utilizando React para criação de um chat
