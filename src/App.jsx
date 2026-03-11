@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 
-const BASE_URL = 'http://192.168.100.23:3333';
+const BASE_URL = 'https://chat-training-api.onrender.com';
 
 /**
  * FUNÇÃO DE UTILIDADE: Resolve o problema de URLs duplicadas ou relativas.
