@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 
-const BASE_URL = 'https://chat-training-api.onrender.com';
+const BASE_URL = 'http://192.168.100.25:3333';
 
 /**
  * FUNÇÃO DE UTILIDADE: Resolve o problema de URLs duplicadas ou relativas.
@@ -55,7 +55,8 @@ function ChatRoom() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            name: user.name, 
+            username: user.username,
+            password: user.password,
             roomId: roomId, 
             avatarUrl: user.avatarUrl 
           }),
@@ -147,7 +148,7 @@ function ChatRoom() {
               <div key={p.id} className="flex items-center space-x-4 p-2 transition-all hover:bg-white/5 rounded-xl">
                 <img src={formatAvatarUrl(p.avatarUrl)} className="w-10 h-10 rounded-2xl object-cover ring-2 ring-slate-800" alt="" />
                 <span className={`text-sm font-bold ${p.id === myUserId ? 'text-indigo-400' : 'text-slate-300'}`}>
-                  {p.name} {p.id === myUserId && " (Você)"}
+                  {p.displayName || p.username} {p.id === myUserId && " (Você)"}
                 </span>
               </div>
             ))}
@@ -169,7 +170,7 @@ function ChatRoom() {
         <div className="flex-1 overflow-y-auto p-12 space-y-10">
           {messages.map((msg, idx) => {
             // Se o ID da mensagem for o meu, alinha à direita
-            const isMe = msg.userId === myUserId;
+            const isMe = msg.userId == myUserId;
 
             return (
               <div key={idx} className={`flex items-start space-x-5 ${isMe ? 'flex-row-reverse space-x-reverse' : ''}`}>
@@ -180,7 +181,7 @@ function ChatRoom() {
                     <p className="text-md font-medium leading-relaxed">{msg.content}</p>
                   </div>
                   <span className="text-[9px] mt-2 font-black text-slate-600 uppercase tracking-widest px-2">
-                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
               </div>
@@ -209,29 +210,77 @@ function ChatRoom() {
 
 function Login() {
   const navigate = useNavigate();
+  
+  // New State
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [email, setEmail] = useState(''); // New field
   const [name, setName] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
   const [roomId, setRoomId] = useState('');
   const [avatarFile, setAvatarFile] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  async function handleConnect(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
-    if (!name || !roomId || !avatarFile) return alert("Preencha todos os campos.");
-
     setLoading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', avatarFile);
-      
-      const res = await fetch(`${BASE_URL}/uploads/avatar`, { method: 'POST', body: formData });
-      const data = await res.json();
 
-      // Salva os dados brutos recebidos da API
-      localStorage.setItem('@Chat:User', JSON.stringify({ name, avatarUrl: data.avatarUrl }));
-      
-      navigate(`/${roomId}`);
+    try {
+      let avatarUrl = '';
+
+      if (isRegistering) {
+        // --- REGISTRATION FLOW ---
+        if (!name || !password || !email) return alert("Preencha todos os campos.");
+
+        // 1. Upload Avatar if selected
+        if (avatarFile) {
+          const formData = new FormData();
+          formData.append('file', avatarFile);
+          const uploadRes = await fetch(`${BASE_URL}/uploads/avatar`, { method: 'POST', body: formData });
+          const uploadData = await uploadRes.json();
+          avatarUrl = uploadData.avatarUrl;
+        }
+
+        // 2. Call Register API
+        const regRes = await fetch(`${BASE_URL}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: name,displayName, password, email, avatarUrl })
+        });
+
+        if (!regRes.ok) {
+            const error = await regRes.json();
+            throw new Error(error.error || "Erro no registro");
+        }
+
+        alert("Conta criada com sucesso! Agora faça login.");
+        setIsRegistering(false); // Switch to login mode
+      } else {
+        // --- LOGIN FLOW ---
+        if (!name || !password || !roomId) return alert("Preencha Nome, Senha e ID da Sala.");
+
+        const sessionRes = await fetch(`${BASE_URL}/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: name, password, roomId }),
+        });
+
+        if (!sessionRes.ok) throw new Error("Usuário ou senha incorretos");
+
+        const sessionData = await sessionRes.json();
+
+        // Save session including display name and avatar from server
+        localStorage.setItem('@Chat:User', JSON.stringify({
+          username: sessionData.user.username,
+          displayName: sessionData.user.displayName,
+          avatarUrl: sessionData.user.avatarUrl,
+          password: password // Keep password for the session logic in ChatRoom
+        }));
+
+        navigate(`/${roomId}`);
+      }
     } catch (err) {
-      alert("Erro ao conectar ao servidor. Verifique se o IP está correto.");
+      alert(err.message);
     } finally {
       setLoading(false);
     }
@@ -240,25 +289,68 @@ function Login() {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-[440px] bg-slate-900 border border-slate-800 rounded-[2.5rem] p-12 shadow-2xl">
-        <h1 className="text-4xl font-black text-white text-center mb-10">Chat Connect</h1>
-        <form onSubmit={handleConnect} className="space-y-6">
-          <input type="text" className="w-full bg-slate-800 border border-slate-700 p-4 rounded-xl text-white outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Seu Nome" value={name} onChange={e => setName(e.target.value)} />
-          <input type="text" className="w-full bg-slate-800 border border-slate-700 p-4 rounded-xl text-white outline-none focus:ring-2 focus:ring-indigo-500" placeholder="ID da Sala (ex: dev)" value={roomId} onChange={e => setRoomId(e.target.value)} />
+        <h1 className="text-4xl font-black text-white text-center mb-2">Chat Connect</h1>
+        <p className="text-slate-500 text-center mb-10 text-sm font-bold uppercase tracking-widest">
+            {isRegistering ? 'Crie sua conta' : 'Acesse uma sala'}
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Email field only shows during registration */}
+          {isRegistering && (
+            <>
+              <input 
+                type="email" 
+                className="w-full bg-slate-800 border border-slate-700 p-4 rounded-xl text-white outline-none focus:ring-2 focus:ring-indigo-500" 
+                placeholder="Seu E-mail" 
+                value={email} 
+                onChange={e => setEmail(e.target.value)} 
+              />
+              
+              {/* NEW FIELD */}
+              <input 
+                type="text" 
+                className="w-full bg-slate-800 border border-slate-700 p-4 rounded-xl text-white outline-none focus:ring-2 focus:ring-indigo-500" 
+                placeholder="Nome de Exibição (ex: João Silva)" 
+                value={displayName} 
+                onChange={e => setDisplayName(e.target.value)} 
+              />
+            </>
+          )}
+
+          <input type="text" className="w-full bg-slate-800 border border-slate-700 p-4 rounded-xl text-white outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Nome de Usuário" value={name} onChange={e => setName(e.target.value)} />
+          <input type="password" className="w-full bg-slate-800 border border-slate-700 p-4 rounded-xl text-white outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Sua Senha" value={password} onChange={e => setPassword(e.target.value)} />
           
-          <label className="flex flex-col items-center justify-center w-full h-32 bg-slate-800 border-2 border-dashed border-slate-700 rounded-2xl cursor-pointer hover:bg-slate-800/50 transition-all">
-            <span className="text-xs text-slate-500 font-bold text-center px-4">
-              {avatarFile ? avatarFile.name : 'Clique para selecionar seu avatar'}
-            </span>
-            <input type="file" className="hidden" accept="image/*" onChange={e => setAvatarFile(e.target.files[0])} />
-          </label>
+          {/* Room ID only shows during Login */}
+          {!isRegistering && (
+            <input type="text" className="w-full bg-slate-800 border border-slate-700 p-4 rounded-xl text-white outline-none focus:ring-2 focus:ring-indigo-500" placeholder="ID da Sala (ex: dev)" value={roomId} onChange={e => setRoomId(e.target.value)} />
+          )}
+          
+          {/* Avatar only shows during Registration */}
+          {isRegistering && (
+              <label className="flex flex-col items-center justify-center w-full h-32 bg-slate-800 border-2 border-dashed border-slate-700 rounded-2xl cursor-pointer hover:bg-slate-800/50 transition-all">
+                <span className="text-xs text-slate-500 font-bold text-center px-4">
+                  {avatarFile ? avatarFile.name : 'Foto de perfil (opcional)'}
+                </span>
+                <input type="file" className="hidden" accept="image/*" onChange={e => setAvatarFile(e.target.files[0])} />
+              </label>
+          )}
 
           <button 
             disabled={loading}
             className="w-full bg-indigo-600 text-white font-black py-5 rounded-2xl shadow-xl transition-all active:scale-95 disabled:opacity-50"
           >
-            {loading ? 'CONECTANDO...' : 'ENTRAR NO CHAT'}
+            {loading ? 'PROCESSANDO...' : isRegistering ? 'CRIAR CONTA' : 'ENTRAR NO CHAT'}
           </button>
         </form>
+
+        <div className="mt-8 text-center">
+            <button 
+                onClick={() => setIsRegistering(!isRegistering)}
+                className="text-indigo-400 text-xs font-black uppercase tracking-widest hover:underline"
+            >
+                {isRegistering ? 'Já tenho conta? Login' : 'Não tem conta? Cadastre-se'}
+            </button>
+        </div>
       </div>
     </div>
   );
