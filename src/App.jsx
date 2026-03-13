@@ -1,5 +1,5 @@
   import React, { useEffect, useRef, useState } from 'react';
-  import { BrowserRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+  import { HashRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 
   const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://unconsenting-unwhetted-ben.ngrok-free.dev').replace(/\/+$/, '');
   const DEFAULT_HEADERS = {
@@ -108,6 +108,15 @@
     }
 
     return data;
+  }
+
+  async function apiFetchOrDefault(path, fallbackValue) {
+    try {
+      return await apiFetch(path);
+    } catch (error) {
+      console.warn(`Falha ao carregar ${path}:`, error);
+      return fallbackValue;
+    }
   }
 
   function FileTypeIcon({ className = 'w-5 h-5' }) {
@@ -319,10 +328,11 @@
           });
           setMyUserId(sessionData.userId);
 
-          const historyData = await apiFetch(`/rooms/${roomId}/messages`);
+          const [historyData, partData] = await Promise.all([
+            apiFetchOrDefault(`/rooms/${roomId}/messages`, { messages: [] }),
+            apiFetchOrDefault(`/rooms/${roomId}/participants`, { participants: [] }),
+          ]);
           setMessages(historyData.messages || []);
-
-          const partData = await apiFetch(`/rooms/${roomId}/participants`);
           setParticipants(partData.participants || []);
 
           const socket = new WebSocket(sessionData.wsUrl);
@@ -749,11 +759,11 @@
 
   export default function App() {
     return (
-      <BrowserRouter>
+      <HashRouter>
         <Routes>
           <Route path="/" element={<Login />} />
           <Route path="/:roomId" element={<ChatRoom />} />
         </Routes>
-      </BrowserRouter>
-    );
-  }
+      </HashRouter>
+  );
+}
