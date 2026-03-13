@@ -165,6 +165,55 @@
     );
   }
 
+  function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) {
+    const [resolvedSrc, setResolvedSrc] = useState(fallbackSrc);
+
+    useEffect(() => {
+      if (!src) {
+        setResolvedSrc(fallbackSrc);
+        return undefined;
+      }
+
+      let active = true;
+      let objectUrl = '';
+
+      async function loadImage() {
+        try {
+          const response = await fetch(src, { headers: DEFAULT_HEADERS });
+
+          if (!response.ok) {
+            throw new Error(`Falha ao carregar imagem: ${response.status}`);
+          }
+
+          const blob = await response.blob();
+          objectUrl = URL.createObjectURL(blob);
+
+          if (!active) {
+            URL.revokeObjectURL(objectUrl);
+            return;
+          }
+
+          setResolvedSrc(objectUrl);
+        } catch {
+          if (active) {
+            setResolvedSrc(fallbackSrc);
+          }
+        }
+      }
+
+      loadImage();
+
+      return () => {
+        active = false;
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+        }
+      };
+    }, [fallbackSrc, src]);
+
+    return <img src={resolvedSrc} alt={alt} className={className} />;
+  }
+
   function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
     if (!attachment) return null;
 
@@ -248,15 +297,12 @@
     if (kind === 'image') {
       return (
         <a href={normalizedUrl} target="_blank" rel="noreferrer" className="mt-3 block">
-          <img
-  src={normalizedUrl}
-  alt={fileName || 'Imagem enviada'}
-  className="max-h-56 w-full rounded-[1.5rem] object-cover"
-  onError={(e) => {
-    e.currentTarget.src = 'https://ui-avatars.com/api/?name=Imagem&background=random';
-  }}
-/>
-
+          <RemoteImage
+            src={normalizedUrl}
+            alt={fileName || 'Imagem enviada'}
+            className="max-h-56 w-full rounded-[1.5rem] object-cover"
+            fallbackSrc="https://ui-avatars.com/api/?name=Imagem&background=random"
+          />
         </a>
       );
     }
@@ -539,10 +585,10 @@
                   className={`flex items-center space-x-4 rounded-xl p-2 transition-all ${participant.status === 'online' ? 'opacity-100' : 'grayscale-[0.5] opacity-40'}`}
                 >
                   <div className="relative">
-                    <img
+                    <RemoteImage
                       src={formatAvatarUrl(participant.avatarUrl)}
                       className="h-10 w-10 rounded-2xl object-cover ring-2 ring-slate-800"
-                      alt=""
+                      alt={participant.displayName || participant.username || 'Avatar'}
                     />
                     <div
                       className={`absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-4 border-slate-900 ${participant.status === 'online' ? 'bg-emerald-500' : 'bg-slate-600'}`}
@@ -601,10 +647,10 @@
 
               return (
                 <div key={msg.id || idx} className={`flex items-start gap-3 md:gap-5 ${isMe ? 'flex-row-reverse' : ''}`}>
-                  <img
+                  <RemoteImage
                     src={formatAvatarUrl(msg.userAvatarUrl)}
                     className="h-10 w-10 shrink-0 rounded-2xl border border-slate-800 object-cover shadow-2xl md:h-12 md:w-12"
-                    alt=""
+                    alt={msg.userName || 'Avatar'}
                   />
                   <div className={`flex max-w-[85%] flex-col sm:max-w-[78%] md:max-w-[65%] ${isMe ? 'items-end' : 'items-start'}`}>
                     <div
