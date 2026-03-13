@@ -15,18 +15,31 @@
 
   const formatAvatarUrl = (path) => {
     if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
-    const cleanPath = path.trim();
-    if (cleanPath.startsWith('http')) return cleanPath;
-    const pathWithSlash = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
-    return `${BASE_URL}${pathWithSlash}`;
+     let url = ''
+     if (cleanPath.startsWith('http')) {
+      url = cleanPath;
+     } else {
+      const pathWithSlash = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+      url = `${BASE_URL}${pathWithSlash}`;
+     }
+
+     const separator = url.includes('?') ? '&': '?';
+     return `${url}${separator}ngrok-skip-browser-warning=1`
   };
 
-  const normalizeFileUrl = (value) => {
-    if (!value || typeof value !== 'string') return '';
-    if (value.startsWith('http')) return value;
+ const normalizeFileUrl = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  let url = '';
+  if (value.startsWith('http')) {
+    url = value;
+  } else {
     const pathWithSlash = value.startsWith('/') ? value : `/${value}`;
-    return `${BASE_URL}${pathWithSlash}`;
-  };
+    url = `${BASE_URL}${pathWithSlash}`;
+  }
+ 
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}ngrok-skip-browser-warning=1`;
+};
 
   const getFileExtension = (value = '') => {
     const cleanValue = value.split('?')[0].split('#')[0];
