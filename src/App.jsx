@@ -157,6 +157,14 @@
     );
   }
 
+  function MenuIcon({ className = 'w-5 h-5' }) {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+        <path d="M4.75 7.25h14.5M4.75 12h14.5M4.75 16.75h14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
   function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
     if (!attachment) return null;
 
@@ -240,7 +248,15 @@
     if (kind === 'image') {
       return (
         <a href={normalizedUrl} target="_blank" rel="noreferrer" className="mt-3 block">
-          <img src={normalizedUrl} alt={fileName || 'Imagem enviada'} className="max-h-56 w-full rounded-[1.5rem] object-cover" />
+          <img
+  src={normalizedUrl}
+  alt={fileName || 'Imagem enviada'}
+  className="max-h-56 w-full rounded-[1.5rem] object-cover"
+  onError={(e) => {
+    e.currentTarget.src = 'https://ui-avatars.com/api/?name=Imagem&background=random';
+  }}
+/>
+
         </a>
       );
     }
@@ -302,6 +318,7 @@
     const [myUserId, setMyUserId] = useState(null);
     const [attachment, setAttachment] = useState(null);
     const [sendingAttachment, setSendingAttachment] = useState(false);
+    const [sidebarOpen, setSidebarOpen] = useState(false);
 
     const socketRef = useRef(null);
     const messagesEndRef = useRef(null);
@@ -402,6 +419,10 @@
       };
     }, [navigate, roomId, user]);
 
+    useEffect(() => {
+      setSidebarOpen(false);
+    }, [roomId]);
+
     function clearAttachment() {
       if (attachment?.previewUrl?.startsWith('blob:')) {
         URL.revokeObjectURL(attachment.previewUrl);
@@ -493,14 +514,21 @@
     });
 
     return (
-      <div className="flex h-screen overflow-hidden bg-slate-950 font-sans text-slate-200 antialiased">
-        <aside className="flex w-80 flex-col border-r border-slate-800 bg-slate-900 shadow-2xl">
-          <div className="border-b border-slate-800 p-10">
+      <div className="flex h-dvh overflow-hidden bg-slate-950 font-sans text-slate-200 antialiased">
+        <div
+          className={`absolute inset-0 z-30 bg-slate-950/70 backdrop-blur-sm transition-opacity md:hidden ${sidebarOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`}
+          onClick={() => setSidebarOpen(false)}
+        />
+
+        <aside
+          className={`absolute inset-y-0 left-0 z-40 flex w-[min(82vw,20rem)] max-w-80 flex-col border-r border-slate-800 bg-slate-900 shadow-2xl transition-transform duration-300 md:static md:w-80 md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        >
+          <div className="border-b border-slate-800 p-5 md:p-10">
             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2>
             <p className="text-xl font-black text-white">#{roomId}</p>
           </div>
 
-          <div className="flex-1 space-y-6 overflow-y-auto p-10">
+          <div className="flex-1 space-y-6 overflow-y-auto p-5 md:p-10">
             <p className="px-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
               Participantes ({participants.length})
             </p>
@@ -533,7 +561,7 @@
             </div>
           </div>
 
-          <div className="p-6">
+          <div className="p-5 md:p-6">
             <button
               onClick={() => {
                 localStorage.clear();
@@ -546,24 +574,44 @@
           </div>
         </aside>
 
-        <main className="flex flex-1 flex-col bg-[#0b0f1a]">
-          <div className="flex-1 space-y-10 overflow-y-auto p-12">
+        <main className="flex min-w-0 flex-1 flex-col bg-[#0b0f1a]">
+          <div className="border-b border-slate-800/80 bg-slate-950/50 px-4 py-3 backdrop-blur md:hidden">
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-700 bg-slate-900/80 text-slate-100"
+                aria-label="Abrir participantes"
+              >
+                <MenuIcon className="h-5 w-5" />
+              </button>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-500">Sala</p>
+                <p className="truncate text-base font-black text-white">#{roomId}</p>
+              </div>
+              <div className="rounded-full border border-slate-700 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-slate-300">
+                {participants.length}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-5 overflow-y-auto px-3 py-4 sm:px-4 md:space-y-8 md:p-8 xl:p-12">
             {messages.map((msg, idx) => {
               const isMe = msg.userId === myUserId;
 
               return (
-                <div key={msg.id || idx} className={`flex items-start space-x-5 ${isMe ? 'flex-row-reverse space-x-reverse' : ''}`}>
+                <div key={msg.id || idx} className={`flex items-start gap-3 md:gap-5 ${isMe ? 'flex-row-reverse' : ''}`}>
                   <img
                     src={formatAvatarUrl(msg.userAvatarUrl)}
-                    className="h-12 w-12 rounded-2xl border border-slate-800 object-cover shadow-2xl"
+                    className="h-10 w-10 shrink-0 rounded-2xl border border-slate-800 object-cover shadow-2xl md:h-12 md:w-12"
                     alt=""
                   />
-                  <div className={`flex max-w-[65%] flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex max-w-[85%] flex-col sm:max-w-[78%] md:max-w-[65%] ${isMe ? 'items-end' : 'items-start'}`}>
                     <div
-                      className={`rounded-[2rem] px-3 py-4 shadow-2xl ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800 text-slate-100'}`}
+                      className={`w-full rounded-[1.5rem] px-3 py-3 shadow-2xl md:rounded-[2rem] md:px-4 md:py-4 ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800 text-slate-100'}`}
                     >
                       {!isMe && <p className="mb-1 text-[10px] font-black uppercase tracking-widest opacity-40">{msg.userName}</p>}
-                      {msg.content && <p className="text-md font-medium leading-relaxed">{msg.content}</p>}
+                      {msg.content && <p className="text-sm font-medium leading-relaxed md:text-base">{msg.content}</p>}
                       {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
                     </div>
                     <span className="mt-2 px-2 text-[9px] font-black uppercase tracking-widest text-slate-600">
@@ -576,11 +624,11 @@
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="border-t border-slate-800 bg-slate-900/50 p-10 backdrop-blur-xl">
-            <form onSubmit={sendMessage} className="mx-auto max-w-5xl space-y-4">
+          <div className="border-t border-slate-800 bg-slate-900/50 px-3 py-3 backdrop-blur-xl sm:px-4 md:p-6 xl:p-10">
+            <form onSubmit={sendMessage} className="mx-auto max-w-5xl space-y-3 md:space-y-4">
               {attachment && <AttachmentPreviewCard attachment={attachment} onRemove={clearAttachment} />}
 
-              <div className="flex items-center gap-3 rounded-[2rem] border border-slate-700/50 bg-slate-800 p-2 pr-4 shadow-2xl">
+              <div className="flex items-end gap-2 rounded-[1.75rem] border border-slate-700/50 bg-slate-800 p-2 shadow-2xl md:items-center md:gap-3 md:rounded-[2rem] md:pr-4">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -592,7 +640,7 @@
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.5rem] border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[1.2rem] border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white md:h-14 md:w-14 md:rounded-[1.5rem]"
                   aria-label="Anexar arquivo"
                 >
                   <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" aria-hidden="true">
@@ -608,7 +656,7 @@
 
                 <input
                   type="text"
-                  className="flex-1 bg-transparent px-2 py-5 text-sm outline-none placeholder:text-slate-600"
+                  className="min-w-0 flex-1 bg-transparent px-1 py-3 text-sm outline-none placeholder:text-slate-600 md:px-2 md:py-5"
                   placeholder={`Mensagem em #${roomId}...`}
                   value={inputValue}
                   onChange={(event) => setInputValue(event.target.value)}
@@ -616,9 +664,10 @@
 
                 <button
                   disabled={sendingAttachment}
-                  className="rounded-[1.5rem] bg-indigo-600 px-10 py-4 text-[10px] font-black tracking-widest text-white transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 hover:bg-indigo-500"
+                  className="rounded-[1.2rem] bg-indigo-600 px-4 py-3 text-[10px] font-black tracking-widest text-white transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 hover:bg-indigo-500 md:rounded-[1.5rem] md:px-8 md:py-4"
                 >
-                  {sendingAttachment ? 'ENVIANDO...' : 'ENVIAR'}
+                  <span className="hidden sm:inline">{sendingAttachment ? 'ENVIANDO...' : 'ENVIAR'}</span>
+                  <span className="sm:hidden">{sendingAttachment ? '...' : 'OK'}</span>
                 </button>
               </div>
             </form>
@@ -694,26 +743,26 @@
     }
 
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-950 p-6">
-        <div className="w-full max-w-[440px] rounded-[2.5rem] border border-slate-800 bg-slate-900 p-12 shadow-2xl">
-          <h1 className="mb-2 text-center text-4xl font-black text-white">Chat Connect</h1>
-          <p className="mb-10 text-center text-sm font-bold uppercase tracking-widest text-slate-500">
+      <div className="flex min-h-dvh flex-col items-center justify-center bg-slate-950 px-4 py-6 sm:p-6">
+        <div className="w-full max-w-[440px] rounded-[2rem] border border-slate-800 bg-slate-900 p-6 shadow-2xl sm:rounded-[2.5rem] sm:p-8 md:p-12">
+          <h1 className="mb-2 text-center text-3xl font-black text-white sm:text-4xl">Chat Connect</h1>
+          <p className="mb-8 text-center text-xs font-bold uppercase tracking-[0.24em] text-slate-500 sm:mb-10 sm:text-sm sm:tracking-widest">
             {isRegistering ? 'Crie sua conta' : 'Acesse uma sala'}
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
             {isRegistering && (
               <>
                 <input
                   type="email"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
                   placeholder="Seu E-mail"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                 />
                 <input
                   type="text"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
                   placeholder="Nome de Exibicao"
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
@@ -723,7 +772,7 @@
 
             <input
               type="text"
-              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
               placeholder="Nome de Usuario"
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -731,7 +780,7 @@
 
             <input
               type="password"
-              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
               placeholder="Sua Senha"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
@@ -740,7 +789,7 @@
             {!isRegistering && (
               <input
                 type="text"
-                className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
                 placeholder="ID da Sala"
                 value={roomId}
                 onChange={(event) => setRoomId(event.target.value)}
@@ -748,7 +797,7 @@
             )}
 
             {isRegistering && (
-              <label className="flex h-32 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700 bg-slate-800 transition-all hover:bg-slate-800/50">
+              <label className="flex h-28 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700 bg-slate-800 transition-all hover:bg-slate-800/50 sm:h-32">
                 <span className="px-4 text-center text-xs font-bold text-slate-500">
                   {avatarFile ? avatarFile.name : 'Foto de perfil (opcional)'}
                 </span>
@@ -756,13 +805,13 @@
               </label>
             )}
 
-            <button disabled={loading} className="w-full rounded-2xl bg-indigo-600 py-5 font-black text-white shadow-xl transition-all active:scale-95">
+            <button disabled={loading} className="w-full rounded-2xl bg-indigo-600 py-4 text-sm font-black text-white shadow-xl transition-all active:scale-95 sm:py-5 sm:text-base">
               {loading ? 'PROCESSANDO...' : isRegistering ? 'CRIAR CONTA' : 'ENTRAR NO CHAT'}
             </button>
           </form>
 
           <div className="mt-8 text-center">
-            <button onClick={() => setIsRegistering(!isRegistering)} className="text-xs font-black uppercase tracking-widest text-indigo-400 hover:underline">
+            <button onClick={() => setIsRegistering(!isRegistering)} className="text-[11px] font-black uppercase tracking-[0.18em] text-indigo-400 hover:underline sm:text-xs sm:tracking-widest">
               {isRegistering ? 'Ja tenho conta? Login' : 'Nao tem conta? Cadastre-se'}
             </button>
           </div>
