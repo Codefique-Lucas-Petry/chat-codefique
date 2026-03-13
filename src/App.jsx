@@ -273,7 +273,10 @@ function ChatRoom() {
       try {
         const sessionRes = await fetch(`${BASE_URL}/sessions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 
+            'application/json',
+            'ngrok-skip-browser-warning': 'true'
+           },
           body: JSON.stringify({
             username: user.username,
             password: user.password,
@@ -600,7 +603,7 @@ function Login() {
 
         const regRes = await fetch(`${BASE_URL}/register`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
           body: JSON.stringify({ username: name, displayName, password, email, avatarUrl }),
         });
 
