@@ -15,6 +15,7 @@
 
   const formatAvatarUrl = (path) => {
     if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
+    const cleanPath = path.trim();
      let url = ''
      if (cleanPath.startsWith('http')) {
       url = cleanPath;
