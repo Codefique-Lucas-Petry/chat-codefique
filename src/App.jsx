@@ -616,7 +616,7 @@ function Login() {
 
         const sessionRes = await fetch(`${BASE_URL}/sessions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
           body: JSON.stringify({ username: name, password, roomId }),
         });
 
