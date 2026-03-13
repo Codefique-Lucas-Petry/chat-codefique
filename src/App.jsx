@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 
-const BASE_URL = 'http://192.168.100.25:3333';
+const BASE_URL = 'https://unconsenting-unwhetted-ben.ngrok-free.dev';
 const CHAT_UPLOAD_ENDPOINTS = [
   '/uploads/file',
   '/uploads/files',
