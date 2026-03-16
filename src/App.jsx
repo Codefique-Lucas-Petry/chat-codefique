@@ -8,9 +8,6 @@ const DEFAULT_HEADERS = {
 
 // --- UTILS ---
 
-/**
- * Ensures all URLs have the ngrok bypass parameter
- */
 const addNgrokBypass = (url) => {
   if (!url) return '';
   const separator = url.includes('?') ? '&' : '?';
@@ -104,17 +101,13 @@ function MenuIcon({ className = 'w-5 h-5' }) {
   );
 }
 
-/**
- * RemoteImage simplified. Using Blob URLs for GIFs is what causes the "stuttering".
- * Using native URLs with the ngrok-skip-browser-warning parameter is more stable.
- */
 const RemoteImage = memo(({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) => {
   return (
     <img 
       src={src || fallbackSrc} 
       alt={alt} 
-      className={`${className} transform-gpu`} // force hardware acceleration
-      style={{ transform: 'translateZ(0)' }}   // fixes GIF pausing in Chrome
+      className={`${className} transform-gpu`}
+      style={{ transform: 'translateZ(0)' }}
       loading="lazy"
       onError={(e) => { e.target.src = fallbackSrc; }}
     />
@@ -195,18 +188,38 @@ function ChatRoom() {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const avatarInputRef = useRef(null);
+  
+  // FIX: Track if it's the first time messages are loaded for this room
+  const isFirstLoad = useRef(true);
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // FIX: Enhanced Scroll Effect
+  useEffect(() => {
+    if (messages.length > 0) {
+      // Use instant scroll for entry, smooth scroll for new messages
+      const behavior = isFirstLoad.current ? 'auto' : 'smooth';
+      
+      const timer = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior });
+        isFirstLoad.current = false; // After first scroll, switch to smooth
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }
+  }, [messages]);
 
   useEffect(() => {
     if (user) {
       setNewDisplayName(user.displayName || '');
       setNewPassword(user.password || '');
     }
-  }, [isSettingsOpen]); // Only reset when opening settings
+  }, [isSettingsOpen]);
 
   useEffect(() => {
     if (!user) { navigate('/'); return; }
+    
+    // Reset first load flag when room changes
+    isFirstLoad.current = true;
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return;
 
     async function startChat() {
@@ -242,7 +255,7 @@ function ChatRoom() {
     }
     startChat();
     return () => { if (socketRef.current) socketRef.current.close(); };
-  }, [roomId]); // Minimal dependency to prevent reconnects
+  }, [roomId]);
 
   async function handleUpdateProfile(e) {
     e.preventDefault();
