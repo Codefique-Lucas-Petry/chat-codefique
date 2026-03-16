@@ -1,441 +1,544 @@
-import express from 'express';
-import http from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
-import cors from 'cors';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-import { pool } from './db.js';
-import dotenv from 'dotenv';
+import React, { useEffect, useRef, useState } from 'react';
+import { HashRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 
-dotenv.config();
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://unconsenting-unwhetted-ben.ngrok-free.dev').replace(/\/+$/, '');
+const DEFAULT_HEADERS = {
+  'ngrok-skip-browser-warning': 'true',
+};
+const CHAT_UPLOAD_ENDPOINTS = [
+  '/uploads/chat',
+  '/uploads/file',
+  '/uploads/message',
+];
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const formatAvatarUrl = (path) => {
+  if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
+  const cleanPath = path.trim();
+  let url = ''
+  if (cleanPath.startsWith('http')) {
+    url = cleanPath;
+  } else {
+    const pathWithSlash = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+    url = `${BASE_URL}${pathWithSlash}`;
+  }
 
-const LOCAL_IP = process.env.LOCAL_IP || '0.0.0.0';
-const PORT = process.env.PORT || 3000;
-const WSURL = process.env.WS_URL; 
-
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-
-const corsOptions = {
-    origin: 'https://chat-codefique.vercel.app',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
-    credentials: true,
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}ngrok-skip-browser-warning=1`
 };
 
-app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
-app.use(express.json());
+const normalizeFileUrl = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  let url = '';
+  if (value.startsWith('http')) {
+    url = value;
+  } else {
+    const pathWithSlash = value.startsWith('/') ? value : `/${value}`;
+    url = `${BASE_URL}${pathWithSlash}`;
+  }
 
-const disconnectTimers = new Map();
-const activeConnections = new Map(); // Map<roomId, Map<userId, Set<socket>>>
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}ngrok-skip-browser-warning=1`;
+};
 
-const uploadDir = './uploads';
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+const getFileExtension = (value = '') => {
+  const cleanValue = value.split('?')[0].split('#')[0];
+  const parts = cleanValue.split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : '';
+};
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
+const getAttachmentKind = ({ name = '', type = '', url = '' }) => {
+  const extension = getFileExtension(name || url);
+  const mime = type.toLowerCase();
+
+  if (mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(extension)) {
+    return 'image';
+  }
+
+  if (mime === 'application/pdf' || extension === 'pdf') {
+    return 'pdf';
+  }
+
+  return 'file';
+};
+
+const formatBytes = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+  return `${Math.round(bytes / 104857.6) / 10} MB`;
+};
+
+const getFileUrlFromResponse = (payload) => {
+  if (!payload || typeof payload !== 'object') return '';
+  const keys = ['fileUrl', 'url', 'avatarUrl'];
+  for (const key of keys) {
+    if (typeof payload[key] === 'string' && payload[key]) {
+      return normalizeFileUrl(payload[key]);
     }
-});
+  }
+  return '';
+};
 
-const upload = multer({ storage });
-
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// =========================
-// HELPERS
-// =========================
-
-function addConnection(roomId, userId, socket) {
-    if (!activeConnections.has(roomId)) {
-        activeConnections.set(roomId, new Map());
-    }
-    const roomConnections = activeConnections.get(roomId);
-    if (!roomConnections.has(userId)) {
-        roomConnections.set(userId, new Set());
-    }
-    roomConnections.get(userId).add(socket);
+async function parseJsonResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    const responseText = await response.text();
+    const snippet = responseText.slice(0, 120).replace(/\s+/g, ' ').trim();
+    throw new Error(`Resposta invalida da API (${response.status}). Esperado JSON, recebido: ${snippet || 'vazio'}`);
+  }
+  return response.json();
 }
 
-function removeConnection(roomId, userId, socket) {
-    const roomConnections = activeConnections.get(roomId);
-    if (!roomConnections) return false;
-    const userSockets = roomConnections.get(userId);
-    if (!userSockets) return false;
-
-    userSockets.delete(socket);
-    if (userSockets.size === 0) {
-        roomConnections.delete(userId);
-    }
-    if (roomConnections.size === 0) {
-        activeConnections.delete(roomId);
-    }
-    return true;
+async function apiFetch(path, options = {}) {
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      ...DEFAULT_HEADERS,
+      ...(options.headers || {}),
+    },
+  });
+  const data = await parseJsonResponse(response);
+  if (!response.ok) throw new Error(data?.error || data?.message || `Erro na requisicao`);
+  return data;
 }
 
-function getConnectedSocketsInRoom(roomId) {
-    const roomConnections = activeConnections.get(roomId);
-    if (!roomConnections) return [];
-    const sockets = [];
-    for (const userSockets of roomConnections.values()) {
-        for (const socket of userSockets) {
-            if (socket.readyState === WebSocket.OPEN) {
-                sockets.push(socket);
-            }
-        }
-    }
-    return sockets;
+async function apiFetchOrDefault(path, fallbackValue) {
+  try {
+    return await apiFetch(path);
+  } catch (error) {
+    console.warn(`Falha ao carregar ${path}:`, error);
+    return fallbackValue;
+  }
 }
 
-function broadcast(roomId, payload, excludeSocket = null) {
-    const message = JSON.stringify(payload);
-    const sockets = getConnectedSocketsInRoom(roomId);
-    for (const client of sockets) {
-        if (client !== excludeSocket) {
-            client.send(message);
-        }
-    }
+function FileTypeIcon({ className = 'w-5 h-5' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M8 3.75h6.586a2 2 0 0 1 1.414.586l3.664 3.664a2 2 0 0 1 .586 1.414V18.25A2.75 2.75 0 0 1 17.5 21h-9A2.75 2.75 0 0 1 5.75 18.25V6.5A2.75 2.75 0 0 1 8.5 3.75Z" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M14.75 3.75v4.5h4.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8.75 14.25h6.5M8.75 17.25h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
 }
 
-async function handleDisconnect(socket) {
-    const { roomId, userId } = socket;
-    if (!roomId || !userId || socket._disconnected) return;
-
-    socket._disconnected = true;
-    removeConnection(roomId, userId, socket);
-
-    const key = `${roomId}:${userId}`;
-
-    const timer = setTimeout(async () => {
-        try {
-            const stillConnected = [...wss.clients].some(
-                (client) =>
-                    client.roomId === roomId &&
-                    client.userId === userId &&
-                    client.readyState === WebSocket.OPEN
-            );
-
-            if (stillConnected) {
-                disconnectTimers.delete(key);
-                return;
-            }
-
-            await pool.query(
-                "UPDATE room_participants SET status = 'offline' WHERE room_id = $1 AND user_id = $2",
-                [roomId, userId]
-            );
-
-            broadcast(roomId, {
-                type: 'participant.status_change',
-                participantId: userId,
-                status: 'offline'
-            });
-        } catch (err) {
-            console.error('Erro ao atualizar status do participante:', err);
-        } finally {
-            disconnectTimers.delete(key);
-        }
-    }, 2000);
-
-    disconnectTimers.set(key, timer);
+function DownloadIcon({ className = 'w-5 h-5' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M12 4.75v9.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M8.75 11.75 12 15l3.25-3.25" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.75 18.25h12.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
 }
 
-// =========================
-// HTTP ROUTES
-// =========================
+function MenuIcon({ className = 'w-5 h-5' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M4.75 7.25h14.5M4.75 12h14.5M4.75 16.75h14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
 
-app.post('/uploads/avatar', upload.single('file'), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
-    res.json({
-        avatarUrl: `/uploads/${req.file.filename}`,
-        filename: req.file.filename
-    });
-});
-
-app.post('/uploads/chat', upload.single('file'), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
-    res.json({
-        fileUrl: `/uploads/${req.file.filename}`
-    });
-});
-
-app.post('/register', async (req, res) => {
-    const { username, password, email, avatarUrl, displayName } = req.body;
-    try {
-        const userExists = await pool.query(
-            'SELECT id FROM users WHERE username = $1 OR email = $2',
-            [username, email]
-        );
-        if (userExists.rows.length > 0) {
-            return res.status(400).json({ error: 'Usuário ou Email já cadastrado' });
-        }
-        const finalDisplayName = displayName || username;
-        const newUserRes = await pool.query(
-            `INSERT INTO users (username, password, email, display_name, avatar_url) 
-             VALUES ($1, $2, $3, $4, $5) 
-             RETURNING id, username, email, display_name as "displayName", avatar_url as "avatarUrl"`,
-            [username, password, email, finalDisplayName, avatarUrl]
-        );
-        res.status(201).json(newUserRes.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao registrar usuário' });
+function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) {
+  const [resolvedSrc, setResolvedSrc] = useState(fallbackSrc);
+  useEffect(() => {
+    if (!src) {
+      setResolvedSrc(fallbackSrc);
+      return undefined;
     }
-});
+    let active = true;
+    let objectUrl = '';
+    async function loadImage() {
+      try {
+        const response = await fetch(src, { headers: DEFAULT_HEADERS });
+        if (!response.ok) throw new Error(`Status: ${response.status}`);
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (active) setResolvedSrc(objectUrl);
+      } catch {
+        if (active) setResolvedSrc(fallbackSrc);
+      }
+    }
+    loadImage();
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [fallbackSrc, src]);
+  return <img src={resolvedSrc} alt={alt} className={className} />;
+}
 
-app.post('/sessions', async (req, res) => {
-    const { username, password, roomId } = req.body;
-    try {
-        const userRes = await pool.query(
-            'SELECT * FROM users WHERE username = $1 AND password = $2',
-            [username, password]
-        );
-        if (userRes.rows.length === 0) {
-            return res.status(401).json({ error: 'Credenciais inválidas' });
-        }
-        const user = userRes.rows[0];
+function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
+  if (!attachment) return null;
+  const kind = getAttachmentKind(attachment);
+  const previewUrl = attachment.previewUrl || attachment.url;
+  const wrapperClass = compact ? 'rounded-[1.5rem] border border-slate-700/60 bg-slate-900/80 p-3' : 'rounded-[1.75rem] border border-slate-700/60 bg-slate-900/80 p-3 sm:p-4';
+  return (
+    <div className={wrapperClass}>
+      {kind === 'image' && <img src={previewUrl} alt="Preview" className={`w-full rounded-[1.25rem] object-cover ${compact ? 'max-h-32' : 'max-h-44'}`} />}
+      {kind === 'pdf' && (
+        <div className="flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-3 sm:p-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-500/15 text-red-300"><span className="text-xs font-black">PDF</span></div>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{attachment.name}</p></div>
+        </div>
+      )}
+      <div className="mt-3 flex items-center justify-between">
+        <div className="min-w-0"><p className="truncate text-sm font-bold">{attachment.name}</p><p className="text-[10px] font-black uppercase text-slate-500">{formatBytes(attachment.size)}</p></div>
+        {onRemove && <button onClick={onRemove} className="rounded-full border border-slate-600 px-3 py-2 text-[10px] font-black text-slate-300 hover:text-red-400">Remover</button>}
+      </div>
+    </div>
+  );
+}
 
-        await pool.query('INSERT INTO rooms (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [roomId]);
+function MessageAttachment({ fileUrl, fileName }) {
+  const normalizedUrl = normalizeFileUrl(fileUrl);
+  if (!normalizedUrl) return null;
+  const kind = getAttachmentKind({ name: fileName, url: normalizedUrl });
+  if (kind === 'image') return <a href={normalizedUrl} target="_blank" rel="noreferrer" className="mt-3 block"><RemoteImage src={normalizedUrl} className="max-h-56 w-full rounded-[1.5rem] object-cover" /></a>;
+  return (
+    <a href={normalizedUrl} target="_blank" rel="noreferrer" className="mt-3 flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-900/70 p-4">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-700 text-slate-200"><FileTypeIcon /></div>
+      <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{fileName || 'Arquivo'}</p></div>
+    </a>
+  );
+}
 
-        await pool.query(
-            `INSERT INTO room_participants (room_id, user_id, status) 
-             VALUES ($1, $2, 'online') 
-             ON CONFLICT (room_id, user_id) 
-             DO UPDATE SET status = 'online'`,
-            [roomId, user.id]
-        );
+function ChatRoom() {
+  const { roomId } = useParams();
+  const navigate = useNavigate();
 
-        const protocol = WSURL.includes('ngrok') ? 'wss' : 'ws';
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('@Chat:User');
+    return saved ? JSON.parse(saved) : null;
+  });
 
-        res.json({
-            userId: user.id,
-            roomId,
-            user: {
-                id: user.id,
-                username: user.username,
-                displayName: user.display_name,
-                avatarUrl: user.avatar_url
-            },
-            wsUrl: `${protocol}://${WSURL}?roomId=${roomId}&userId=${user.id}`
+  const [messages, setMessages] = useState([]);
+  const [participants, setParticipants] = useState([]);
+  const [inputValue, setInputValue] = useState('');
+  const [myUserId, setMyUserId] = useState(null);
+  const [attachment, setAttachment] = useState(null);
+  const [sendingAttachment, setSendingAttachment] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  // Settings Modal States
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [newDisplayName, setNewDisplayName] = useState(user?.displayName || '');
+  const [newPassword, setNewPassword] = useState(user?.password || '');
+  const [newAvatarFile, setNewAvatarFile] = useState(null);
+  const [updatingProfile, setUpdatingProfile] = useState(false);
+
+  const socketRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const initialized = useRef(false);
+  const fileInputRef = useRef(null);
+  const avatarInputRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!user) { navigate('/'); return; }
+    if (initialized.current) return;
+    initialized.current = true;
+
+    async function startChat() {
+      try {
+        const sessionData = await apiFetch('/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: user.username, password: user.password, roomId }),
         });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao iniciar sessão' });
-    }
-});
+        setMyUserId(sessionData.userId);
 
-// PATCH: Route to update User profile inside the room
-app.patch('/users/update', async (req, res) => {
-    const { userId, password, displayName, avatarUrl } = req.body;
+        const [history, parts] = await Promise.all([
+          apiFetchOrDefault(`/rooms/${roomId}/messages`, { messages: [] }),
+          apiFetchOrDefault(`/rooms/${roomId}/participants`, { participants: [] }),
+        ]);
+        setMessages(history.messages || []);
+        setParticipants(parts.participants || []);
 
-    if (!userId) return res.status(400).json({ error: 'ID do usuário é obrigatório' });
-
-    try {
-        const updates = [];
-        const values = [];
-        let counter = 1;
-
-        if (password) {
-            updates.push(`password = $${counter++}`);
-            values.push(password);
-        }
-        if (displayName) {
-            updates.push(`display_name = $${counter++}`);
-            values.push(displayName);
-        }
-        if (avatarUrl) {
-            updates.push(`avatar_url = $${counter++}`);
-            values.push(avatarUrl);
-        }
-
-        if (updates.length === 0) return res.status(400).json({ error: "Nada para atualizar" });
-
-        values.push(userId);
-        const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${counter} RETURNING id, username, display_name as "displayName", avatar_url as "avatarUrl"`;
-        
-        const result = await pool.query(query, values);
-        const updatedUser = result.rows[0];
-
-        // Broadcast change to all rooms where this user is currently online
-        activeConnections.forEach((roomUserMap, roomId) => {
-            if (roomUserMap.has(userId.toString())) {
-                broadcast(roomId, {
-                    type: 'participant.status_change',
-                    participantId: userId,
-                    status: 'online',
-                    participant: updatedUser // Frontend uses this to update the sidebar list
-                });
-            }
-        });
-
-        res.json(updatedUser);
-    } catch (err) {
-        console.error('Erro ao atualizar usuário:', err);
-        res.status(500).json({ error: 'Erro ao atualizar perfil' });
-    }
-});
-
-app.get('/rooms/:roomId/messages', async (req, res) => {
-    const { roomId } = req.params;
-    try {
-        const result = await pool.query(
-            `SELECT m.id, m.user_id as "userId", m.content, m.file_url as "fileUrl", m.file_name as "fileName", 
-                    m.created_at, u.display_name as "userName", u.avatar_url as "userAvatarUrl"
-             FROM messages m JOIN users u ON m.user_id = u.id
-             WHERE m.room_id = $1 ORDER BY m.created_at ASC`,
-            [roomId]
-        );
-        res.json({ roomId, messages: result.rows });
-    } catch (err) {
-        res.status(500).json({ error: 'Erro ao buscar mensagens' });
-    }
-});
-
-app.get('/rooms/:roomId/participants', async (req, res) => {
-    const { roomId } = req.params;
-    try {
-        const result = await pool.query(
-            `SELECT u.id, u.username, u.display_name as "displayName", u.avatar_url as "avatarUrl", rp.status
-             FROM users u JOIN room_participants rp ON u.id = rp.user_id
-             WHERE rp.room_id = $1`,
-            [roomId]
-        );
-        res.json({ participants: result.rows });
-    } catch (err) {
-        res.status(500).json({ error: 'Erro ao buscar participantes' });
-    }
-});
-
-// =========================
-// WEBSOCKET
-// =========================
-
-wss.on('connection', async (socket, request) => {
-    const url = new URL(request.url, `http://${request.headers.host}`);
-    const roomId = url.searchParams.get('roomId');
-    const userId = url.searchParams.get('userId');
-
-    if (!roomId || !userId) {
-        socket.close(1008, 'roomId ou userId ausente');
-        return;
-    }
-
-    const key = `${roomId}:${userId}`;
-    if (disconnectTimers.has(key)) {
-        clearTimeout(disconnectTimers.get(key));
-        disconnectTimers.delete(key);
-    }
-
-    socket.roomId = roomId;
-    socket.userId = userId;
-    socket.isAlive = true;
-    socket._disconnected = false;
-
-    socket.on('pong', () => { socket.isAlive = true; });
-
-    socket.on('close', async () => {
-        await handleDisconnect(socket);
-    });
-
-    try {
-        const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-        const user = userRes.rows[0];
-        if (!user) return socket.close(1008, 'Usuário inválido');
-
-        const roomConnections = activeConnections.get(roomId);
-        const alreadyOnline = roomConnections?.has(userId) || false;
-
-        addConnection(roomId, userId, socket);
-
-        await pool.query(
-            `INSERT INTO room_participants (room_id, user_id, status) 
-             VALUES ($1, $2, 'online') ON CONFLICT (room_id, user_id) DO UPDATE SET status = 'online'`,
-            [roomId, userId]
-        );
-
-        const participantsRes = await pool.query(
-            `SELECT u.id, u.username, u.display_name as "displayName", u.avatar_url as "avatarUrl", rp.status
-             FROM users u JOIN room_participants rp ON u.id = rp.user_id WHERE rp.room_id = $1`,
-            [roomId]
-        );
-
-        socket.send(JSON.stringify({
-            type: 'room.joined',
-            roomId,
-            participants: participantsRes.rows
-        }));
-
-        if (!alreadyOnline) {
-            broadcast(roomId, {
-                type: 'participant.status_change',
-                participantId: userId,
-                status: 'online',
-                participant: {
-                    id: user.id,
-                    username: user.username,
-                    displayName: user.display_name,
-                    avatarUrl: user.avatar_url
+        const socket = new WebSocket(sessionData.wsUrl);
+        socketRef.current = socket;
+        socket.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          switch (data.type) {
+            case 'room.joined': setParticipants(data.participants || []); break;
+            case 'message.new': setMessages((prev) => [...prev, data.message]); break;
+            case 'participant.status_change':
+              setParticipants((prev) => {
+                const exists = prev.find(p => p.id === data.participantId);
+                if (exists) {
+                  return prev.map(p => p.id === data.participantId ? { ...p, ...data.participant, status: data.status } : p);
                 }
-            }, socket);
-        }
-
-        socket.on('message', async (rawData) => {
-            try {
-                const data = JSON.parse(rawData.toString());
-                if (data.type === 'message.send') {
-                    if (!data.content && !data.fileUrl) return;
-                    const msgRes = await pool.query(
-                        `INSERT INTO messages (room_id, user_id, content, file_url, file_name) 
-                         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-                        [roomId, userId, data.content || null, data.fileUrl || null, data.fileName || null]
-                    );
-                    const savedMsg = msgRes.rows[0];
-
-                    // Fetch latest user info for the broadcast to ensure display name is correct
-                    const senderRes = await pool.query('SELECT display_name, avatar_url FROM users WHERE id = $1', [userId]);
-                    const sender = senderRes.rows[0];
-
-                    broadcast(roomId, {
-                        type: 'message.new',
-                        message: {
-                            ...savedMsg,
-                            userId: savedMsg.user_id,
-                            fileUrl: savedMsg.file_url,
-                            fileName: savedMsg.file_name,
-                            userName: sender.display_name,
-                            userAvatarUrl: sender.avatar_url
-                        }
-                    });
-                }
-            } catch (e) {
-                console.error('Erro ao processar mensagem:', e);
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        socket.close();
+                return data.participant ? [...prev, { ...data.participant, status: data.status }] : prev;
+              });
+              // Update message avatars/names if they changed
+              if (data.participant) {
+                setMessages(prev => prev.map(m => m.userId === data.participantId ? { ...m, userName: data.participant.displayName, userAvatarUrl: data.participant.avatarUrl } : m));
+              }
+              break;
+          }
+        };
+      } catch (err) { console.error(err); }
     }
-});
+    startChat();
+    return () => socketRef.current?.close();
+  }, [navigate, roomId, user]);
 
-const heartbeatInterval = setInterval(() => {
-    wss.clients.forEach((socket) => {
-        if (socket.isAlive === false) return socket.terminate();
-        socket.isAlive = false;
-        socket.ping();
-    });
-}, 30000);
+  async function handleUpdateProfile(e) {
+    e.preventDefault();
+    setUpdatingProfile(true);
+    try {
+      let avatarUrl = user.avatarUrl;
 
-wss.on('close', () => clearInterval(heartbeatInterval));
+      if (newAvatarFile) {
+        const formData = new FormData();
+        formData.append('file', newAvatarFile);
+        const uploadRes = await fetch(`${BASE_URL}/uploads/avatar`, {
+          method: 'POST',
+          headers: DEFAULT_HEADERS,
+          body: formData,
+        });
+        const uploadData = await parseJsonResponse(uploadRes);
+        avatarUrl = uploadData.avatarUrl;
+      }
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ Servidor rodando em http://${LOCAL_IP}:${PORT}`);
-});
+      const updated = await apiFetch('/users/update', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: myUserId,
+          displayName: newDisplayName,
+          password: newPassword,
+          avatarUrl
+        })
+      });
+
+      const updatedUser = { ...user, ...updated, password: newPassword };
+      setUser(updatedUser);
+      localStorage.setItem('@Chat:User', JSON.stringify(updatedUser));
+      setIsSettingsOpen(false);
+      alert("Perfil atualizado!");
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setUpdatingProfile(false);
+    }
+  }
+
+  async function sendMessage(event) {
+    event.preventDefault();
+    if ((!inputValue.trim() && !attachment) || !socketRef.current) return;
+    try {
+      let fileUrl = '';
+      if (attachment?.file) {
+        setSendingAttachment(true);
+        const formData = new FormData();
+        formData.append('file', attachment.file);
+        const res = await fetch(`${BASE_URL}/uploads/chat`, { method: 'POST', headers: DEFAULT_HEADERS, body: formData });
+        const data = await parseJsonResponse(res);
+        fileUrl = getFileUrlFromResponse(data);
+      }
+      socketRef.current.send(JSON.stringify({ type: 'message.send', content: inputValue.trim(), fileUrl, fileName: attachment?.name }));
+      setInputValue('');
+      setAttachment(null);
+    } catch (error) { alert(error.message); } finally { setSendingAttachment(false); }
+  }
+
+  if (!user) return null;
+
+  return (
+    <div className="flex h-dvh overflow-hidden bg-slate-950 font-sans text-slate-200 antialiased">
+      {/* Sidebar Mobile Overlay */}
+      <div className={`absolute inset-0 z-30 bg-slate-950/70 backdrop-blur-sm transition-opacity md:hidden ${sidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`} onClick={() => setSidebarOpen(false)} />
+
+      {/* Sidebar */}
+      <aside className={`absolute inset-y-0 left-0 z-40 flex w-80 flex-col border-r border-slate-800 bg-slate-900 transition-transform md:static md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="border-b border-slate-800 p-6">
+          <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2>
+          <p className="text-xl font-black text-white">#{roomId}</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Participantes ({participants.length})</p>
+          <div className="space-y-4">
+            {participants.map((p) => (
+              <div key={p.id} className={`flex items-center gap-4 transition-opacity ${p.status === 'online' ? 'opacity-100' : 'opacity-40'}`}>
+                <div className="relative">
+                  <RemoteImage src={formatAvatarUrl(p.avatarUrl)} className="h-10 w-10 rounded-2xl object-cover ring-2 ring-slate-800" />
+                  <div className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-slate-900 ${p.status === 'online' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
+                </div>
+                <div className="flex flex-col min-w-0">
+                  <span className={`truncate text-sm font-bold ${p.id === myUserId ? 'text-indigo-400' : 'text-slate-200'}`}>{p.displayName || p.username}</span>
+                  <span className="text-[9px] font-black uppercase opacity-50">{p.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-6 space-y-2 border-t border-slate-800">
+          <button onClick={() => setIsSettingsOpen(true)} className="w-full rounded-xl bg-slate-800 py-3 text-[10px] font-black uppercase hover:bg-slate-700">Editar Perfil</button>
+          <button onClick={() => { localStorage.clear(); window.location.href = '/'; }} className="w-full rounded-xl bg-red-500/10 py-3 text-[10px] font-black uppercase text-red-500 hover:bg-red-500/20">Sair</button>
+        </div>
+      </aside>
+
+      {/* Main Chat Area */}
+      <main className="flex flex-1 flex-col bg-[#0b0f1a]">
+        {/* Mobile Header */}
+        <header className="flex items-center justify-between border-b border-slate-800/80 bg-slate-950/50 p-4 md:hidden">
+          <button onClick={() => setSidebarOpen(true)} className="rounded-xl border border-slate-700 p-2"><MenuIcon /></button>
+          <span className="font-black">#{roomId}</span>
+          <div className="w-10" />
+        </header>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
+          {messages.map((msg, idx) => {
+            const isMe = msg.userId === myUserId;
+            return (
+              <div key={msg.id || idx} className={`flex items-start gap-3 ${isMe ? 'flex-row-reverse' : ''}`}>
+                <RemoteImage src={formatAvatarUrl(msg.userAvatarUrl)} className="h-10 w-10 rounded-2xl object-cover shadow-lg" />
+                <div className={`flex max-w-[80%] flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className={`rounded-[1.5rem] p-4 shadow-xl ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800'}`}>
+                    {!isMe && <p className="mb-1 text-[10px] font-black uppercase opacity-40">{msg.userName}</p>}
+                    {msg.content && <p className="text-sm leading-relaxed">{msg.content}</p>}
+                    {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
+                  </div>
+                  <span className="mt-1 text-[9px] font-black uppercase opacity-30">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              </div>
+            );
+          })}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input area */}
+        <div className="border-t border-slate-800 bg-slate-900/50 p-4 md:p-10">
+          <form onSubmit={sendMessage} className="mx-auto max-w-4xl space-y-4">
+            {attachment && <AttachmentPreviewCard attachment={attachment} onRemove={() => setAttachment(null)} />}
+            <div className="flex items-center gap-3 rounded-[2rem] border border-slate-700/50 bg-slate-800 p-2 pr-4">
+              <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => {
+                const f = e.target.files[0];
+                if (f) setAttachment({ file: f, name: f.name, size: f.size, type: f.type, previewUrl: URL.createObjectURL(f) });
+              }} />
+              <button type="button" onClick={() => fileInputRef.current?.click()} className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-700 text-slate-400 hover:text-white">
+                <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" strokeLinecap="round" /></svg>
+              </button>
+              <input type="text" className="flex-1 bg-transparent py-3 outline-none placeholder:text-slate-600" placeholder="Digite uma mensagem..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
+              <button disabled={sendingAttachment} className="rounded-2xl bg-indigo-600 px-6 py-3 text-[10px] font-black uppercase tracking-widest disabled:opacity-50">
+                {sendingAttachment ? '...' : 'Enviar'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </main>
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-[2.5rem] border border-slate-800 bg-slate-900 p-8 shadow-2xl">
+            <h2 className="mb-6 text-xl font-black text-white">Configurações de Perfil</h2>
+            <form onSubmit={handleUpdateProfile} className="space-y-5">
+              <div className="flex flex-col items-center gap-4 mb-4">
+                <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
+                  <RemoteImage src={newAvatarFile ? URL.createObjectURL(newAvatarFile) : formatAvatarUrl(user.avatarUrl)} className="h-24 w-24 rounded-[2rem] object-cover ring-4 ring-slate-800 group-hover:opacity-50 transition-opacity" />
+                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="text-[10px] font-black uppercase">Trocar</span>
+                  </div>
+                  <input type="file" className="hidden" ref={avatarInputRef} accept="image/*" onChange={e => setNewAvatarFile(e.target.files[0])} />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Nome de Exibição</label>
+                <input type="text" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 outline-none focus:ring-2 focus:ring-indigo-500" value={newDisplayName} onChange={e => setNewDisplayName(e.target.value)} />
+              </div>
+
+              <div className="space-y-1">
+                <label className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Nova Senha</label>
+                <input type="password" placeholder="Mantenha vazio para não alterar" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 outline-none focus:ring-2 focus:ring-indigo-500" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setIsSettingsOpen(false)} className="flex-1 rounded-2xl border border-slate-700 py-4 text-[10px] font-black uppercase text-slate-400 hover:bg-slate-800">Cancelar</button>
+                <button disabled={updatingProfile} className="flex-1 rounded-2xl bg-indigo-600 py-4 text-[10px] font-black uppercase text-white hover:bg-indigo-500 disabled:opacity-50">
+                  {updatingProfile ? 'Salvando...' : 'Salvar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ... Login and App components remain mostly the same as your provided text ...
+
+function Login() {
+  const navigate = useNavigate();
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [roomId, setRoomId] = useState('');
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setLoading(true);
+    try {
+      let avatarUrl = '';
+      if (isRegistering) {
+        if (!name || !password || !email) throw new Error('Preencha os campos obrigatórios');
+        if (avatarFile) {
+          const formData = new FormData();
+          formData.append('file', avatarFile);
+          const uploadRes = await fetch(`${BASE_URL}/uploads/avatar`, { method: 'POST', headers: DEFAULT_HEADERS, body: formData });
+          const uploadData = await parseJsonResponse(uploadRes);
+          avatarUrl = uploadData.avatarUrl;
+        }
+        await apiFetch('/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: name, displayName, password, email, avatarUrl }) });
+        alert('Conta criada!');
+        setIsRegistering(false);
+      } else {
+        const sessionData = await apiFetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: name, password, roomId }) });
+        localStorage.setItem('@Chat:User', JSON.stringify({ ...sessionData.user, password }));
+        navigate(`/${roomId}`);
+      }
+    } catch (err) { alert(err.message); } finally { setLoading(false); }
+  }
+
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-slate-950 p-6">
+      <div className="w-full max-w-[440px] rounded-[2.5rem] border border-slate-800 bg-slate-900 p-8 md:p-12 shadow-2xl">
+        <h1 className="mb-2 text-center text-3xl font-black text-white">Chat Connect</h1>
+        <p className="mb-10 text-center text-xs font-bold uppercase tracking-widest text-slate-500">{isRegistering ? 'Crie sua conta' : 'Acesse uma sala'}</p>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {isRegistering && <><input type="email" placeholder="E-mail" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={email} onChange={e => setEmail(e.target.value)} /><input type="text" placeholder="Nome de Exibição" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={displayName} onChange={e => setDisplayName(e.target.value)} /></>}
+          <input type="text" placeholder="Usuário" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={name} onChange={e => setName(e.target.value)} />
+          <input type="password" placeholder="Senha" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={password} onChange={e => setPassword(e.target.value)} />
+          {!isRegistering && <input type="text" placeholder="ID da Sala" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={roomId} onChange={e => setRoomId(e.target.value)} />}
+          {isRegistering && <label className="flex h-32 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700 bg-slate-800"><span className="text-xs font-bold text-slate-500">{avatarFile ? avatarFile.name : 'Foto de perfil (opcional)'}</span><input type="file" className="hidden" accept="image/*" onChange={e => setAvatarFile(e.target.files[0])} /></label>}
+          <button disabled={loading} className="w-full rounded-2xl bg-indigo-600 py-5 text-sm font-black uppercase text-white shadow-xl hover:bg-indigo-500 transition-colors">{loading ? '...' : isRegistering ? 'Criar Conta' : 'Entrar'}</button>
+        </form>
+        <button onClick={() => setIsRegistering(!isRegistering)} className="mt-8 w-full text-center text-xs font-black uppercase text-indigo-400 hover:underline">{isRegistering ? 'Já tem conta? Login' : 'Não tem conta? Cadastre-se'}</button>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <HashRouter>
+      <Routes>
+        <Route path="/" element={<Login />} />
+        <Route path="/:roomId" element={<ChatRoom />} />
+      </Routes>
+    </HashRouter>
+  );
+}
