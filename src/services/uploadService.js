@@ -24,3 +24,5 @@ export const uploadService = {
     return response.json();
   }
 };
+
+export default uploadService;

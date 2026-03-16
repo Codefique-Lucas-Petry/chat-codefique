@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 
 // Hooks & Services
 import { useChat } from '../hooks/useChat';
-import { uploadService } from '../services/uploadService';
+import uploadService from '../services/uploadService';
 
 // Components
 import Sidebar from '../components/chat/Sidebar';
