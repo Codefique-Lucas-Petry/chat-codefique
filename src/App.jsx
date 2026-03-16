@@ -6,6 +6,10 @@ const DEFAULT_HEADERS = {
   'ngrok-skip-browser-warning': 'true',
 };
 
+// =========================
+// UTILS
+// =========================
+
 const formatAvatarUrl = (path) => {
   if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
   const cleanPath = path.trim();
@@ -87,6 +91,10 @@ async function apiFetchOrDefault(path, fallbackValue) {
   try { return await apiFetch(path); } catch (error) { console.warn(`Falha ao carregar ${path}:`, error); return fallbackValue; }
 }
 
+// =========================
+// COMPONENTS
+// =========================
+
 function FileTypeIcon({ className = 'w-5 h-5' }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
@@ -161,13 +169,19 @@ function MessageAttachment({ fileUrl, fileName }) {
   );
 }
 
+// =========================
+// MAIN PAGES
+// =========================
+
 function ChatRoom() {
   const { roomId } = useParams();
   const navigate = useNavigate();
+  
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('@Chat:User');
     return saved ? JSON.parse(saved) : null;
   });
+  
   const [messages, setMessages] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [inputValue, setInputValue] = useState('');
@@ -176,22 +190,48 @@ function ChatRoom() {
   const [sendingAttachment, setSendingAttachment] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [newDisplayName, setNewDisplayName] = useState(user?.displayName || '');
-  const [newPassword, setNewPassword] = useState(user?.password || '');
+  
+  const [newDisplayName, setNewDisplayName] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [newAvatarFile, setNewAvatarFile] = useState(null);
   const [updatingProfile, setUpdatingProfile] = useState(false);
+  
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
-  const initialized = useRef(false);
   const fileInputRef = useRef(null);
   const avatarInputRef = useRef(null);
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // Scroll to bottom when messages change
+  useEffect(() => { 
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [messages]);
 
+  // Sync settings inputs when user data is loaded
+  useEffect(() => {
+    if (user) {
+      setNewDisplayName(user.displayName || '');
+      setNewPassword(user.password || '');
+    }
+  }, [user]);
+
+  // FIX: Secondary effect to update existing messages in UI if user updates profile locally
+  useEffect(() => {
+    if (user && myUserId) {
+        setMessages(prev => prev.map(m => 
+            m.userId === myUserId 
+            ? { ...m, userName: user.displayName, userAvatarUrl: user.avatarUrl } 
+            : m
+        ));
+    }
+  }, [user?.displayName, user?.avatarUrl, myUserId]);
+
+  // MAIN CHAT INITIALIZATION
   useEffect(() => {
     if (!user) { navigate('/'); return; }
-    if (initialized.current) return;
-    initialized.current = true;
+    
+    // Only connect if we don't have an active connection for this roomId
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return;
+
     async function startChat() {
       try {
         const sessionData = await apiFetch('/sessions', {
@@ -199,37 +239,64 @@ function ChatRoom() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username: user.username, password: user.password, roomId }),
         });
+        
         setMyUserId(sessionData.userId);
+        
         const [history, parts] = await Promise.all([
           apiFetchOrDefault(`/rooms/${roomId}/messages`, { messages: [] }),
           apiFetchOrDefault(`/rooms/${roomId}/participants`, { participants: [] }),
         ]);
+        
         setMessages(history.messages || []);
         setParticipants(parts.participants || []);
+        
         const socket = new WebSocket(sessionData.wsUrl);
         socketRef.current = socket;
+        
         socket.onmessage = (event) => {
           const data = JSON.parse(event.data);
           switch (data.type) {
-            case 'room.joined': setParticipants(data.participants || []); break;
-            case 'message.new': setMessages((prev) => [...prev, data.message]); break;
+            case 'room.joined': 
+              setParticipants(data.participants || []); 
+              break;
+            case 'message.new': 
+              setMessages((prev) => [...prev, data.message]); 
+              break;
             case 'participant.status_change':
               setParticipants((prev) => {
                 const exists = prev.find(p => p.id === data.participantId);
-                if (exists) return prev.map(p => p.id === data.participantId ? { ...p, ...data.participant, status: data.status } : p);
+                if (exists) {
+                    return prev.map(p => p.id === data.participantId 
+                        ? { ...p, ...data.participant, status: data.status } 
+                        : p
+                    );
+                }
                 return data.participant ? [...prev, { ...data.participant, status: data.status }] : prev;
               });
+              
+              // If we receive a participant update, refresh names in the chat history
               if (data.participant) {
-                setMessages(prev => prev.map(m => m.userId === data.participantId ? { ...m, userName: data.participant.displayName, userAvatarUrl: data.participant.avatarUrl } : m));
+                setMessages(prev => prev.map(m => 
+                    m.userId === data.participantId 
+                    ? { ...m, userName: data.participant.displayName, userAvatarUrl: data.participant.avatarUrl } 
+                    : m
+                ));
               }
               break;
           }
         };
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error("Chat Error:", err); 
+      }
     }
+    
     startChat();
-    return () => socketRef.current?.close();
-  }, [navigate, roomId, user]);
+
+    return () => {
+        // Only close if we are actually unmounting or roomId changes
+        // This prevents profile updates from closing the socket
+    };
+  }, [navigate, roomId]); // REMOVED 'user' from dependencies to prevent disconnect on name change
 
   async function handleUpdateProfile(e) {
     e.preventDefault();
@@ -243,17 +310,23 @@ function ChatRoom() {
         const uploadData = await parseJsonResponse(uploadRes);
         avatarUrl = uploadData.avatarUrl;
       }
+      
       const updated = await apiFetch('/users/update', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: myUserId, displayName: newDisplayName, password: newPassword, avatarUrl })
       });
+      
       const updatedUser = { ...user, ...updated, password: newPassword };
       setUser(updatedUser);
       localStorage.setItem('@Chat:User', JSON.stringify(updatedUser));
       setIsSettingsOpen(false);
-      alert("Perfil atualizado!");
-    } catch (err) { alert(err.message); } finally { setUpdatingProfile(false); }
+      setNewAvatarFile(null);
+    } catch (err) { 
+        alert(err.message); 
+    } finally { 
+        setUpdatingProfile(false); 
+    }
   }
 
   async function sendMessage(event) {
@@ -279,8 +352,10 @@ function ChatRoom() {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-slate-950 font-sans text-slate-200 antialiased">
+      {/* Sidebar Backdrop (Mobile) */}
       <div className={`absolute inset-0 z-30 bg-slate-950/70 backdrop-blur-sm transition-opacity md:hidden ${sidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`} onClick={() => setSidebarOpen(false)} />
 
+      {/* Sidebar */}
       <aside className={`absolute inset-y-0 left-0 z-40 flex w-80 flex-col border-r border-slate-800 bg-slate-900 transition-transform md:static md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="border-b border-slate-800 p-6">
           <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2>
@@ -297,7 +372,7 @@ function ChatRoom() {
                   <div className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-slate-900 ${p.status === 'online' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
                 </div>
                 <div className="flex flex-col min-w-0 flex-1">
-                  <span title={p.displayName || p.username} className={`truncate text-sm font-bold ${p.id === myUserId ? 'text-indigo-400' : 'text-slate-200'}`}>
+                  <span title={p.displayName || p.username} className={`truncate text-sm font-bold ${Number(p.id) === Number(myUserId) ? 'text-indigo-400' : 'text-slate-200'}`}>
                     {p.displayName || p.username}
                   </span>
                   <span className="text-[9px] font-black uppercase opacity-50">{p.status}</span>
@@ -309,10 +384,11 @@ function ChatRoom() {
 
         <div className="p-6 space-y-2 border-t border-slate-800">
           <button onClick={() => setIsSettingsOpen(true)} className="w-full rounded-xl bg-slate-800 py-3 text-[10px] font-black uppercase hover:bg-slate-700">Editar Perfil</button>
-          <button onClick={() => { localStorage.clear(); window.location.href = '/'; }} className="w-full rounded-xl bg-red-500/10 py-3 text-[10px] font-black uppercase text-red-500 hover:bg-red-500/20">Sair</button>
+          <button onClick={() => { socketRef.current?.close(); localStorage.clear(); window.location.href = '/'; }} className="w-full rounded-xl bg-red-500/10 py-3 text-[10px] font-black uppercase text-red-500 hover:bg-red-500/20">Sair</button>
         </div>
       </aside>
 
+      {/* Main Chat Area */}
       <main className="flex flex-1 flex-col bg-[#0b0f1a]">
         <header className="flex items-center justify-between border-b border-slate-800/80 bg-slate-950/50 p-4 md:hidden">
           <button onClick={() => setSidebarOpen(true)} className="rounded-xl border border-slate-700 p-2"><MenuIcon /></button>
@@ -322,7 +398,7 @@ function ChatRoom() {
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
           {messages.map((msg, idx) => {
-            const isMe = msg.userId === myUserId;
+            const isMe = Number(msg.userId) === Number(myUserId);
             return (
               <div key={msg.id || idx} className={`flex items-start gap-3 ${isMe ? 'flex-row-reverse' : ''}`}>
                 <div className="shrink-0">
@@ -342,6 +418,7 @@ function ChatRoom() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Input Area */}
         <div className="border-t border-slate-800 bg-slate-900/50 p-4 md:p-10">
           <form onSubmit={sendMessage} className="mx-auto max-w-4xl space-y-4">
             {attachment && <AttachmentPreviewCard attachment={attachment} onRemove={() => setAttachment(null)} />}
@@ -362,6 +439,7 @@ function ChatRoom() {
         </div>
       </main>
 
+      {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md">
           <div className="w-full max-w-md rounded-[2.5rem] border border-slate-800 bg-slate-900 p-8 shadow-2xl">
