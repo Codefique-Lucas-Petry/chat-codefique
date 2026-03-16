@@ -1,10 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, memo } from 'react';
 import { HashRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://unconsenting-unwhetted-ben.ngrok-free.dev').replace(/\/+$/, '');
 const DEFAULT_HEADERS = {
   'ngrok-skip-browser-warning': 'true',
 };
+
+// --- UTILS ---
 
 const formatAvatarUrl = (path) => {
   if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
@@ -87,6 +89,8 @@ async function apiFetchOrDefault(path, fallbackValue) {
   try { return await apiFetch(path); } catch (error) { console.warn(`Falha ao carregar ${path}:`, error); return fallbackValue; }
 }
 
+// --- SHARED COMPONENTS ---
+
 function FileTypeIcon({ className = 'w-5 h-5' }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
@@ -105,12 +109,21 @@ function MenuIcon({ className = 'w-5 h-5' }) {
   );
 }
 
-function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) {
+/**
+ * RemoteImage: Memoized to prevent GIFs from restarting when the user types.
+ */
+const RemoteImage = memo(function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) {
   const [resolvedSrc, setResolvedSrc] = useState(fallbackSrc);
+  const lastSrcRef = useRef(null);
+
   useEffect(() => {
     if (!src) { setResolvedSrc(fallbackSrc); return; }
+    if (src === lastSrcRef.current) return; // Prevent reload if src hasn't changed
+    
+    lastSrcRef.current = src;
     let active = true;
     let objectUrl = '';
+
     async function loadImage() {
       try {
         const response = await fetch(src, { headers: DEFAULT_HEADERS });
@@ -123,8 +136,9 @@ function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avata
     loadImage();
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [fallbackSrc, src]);
-  return <img src={resolvedSrc} alt={alt} className={className} />;
-}
+
+  return <img src={resolvedSrc} alt={alt} className={className} loading="lazy" />;
+});
 
 function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
   if (!attachment) return null;
@@ -161,6 +175,30 @@ function MessageAttachment({ fileUrl, fileName }) {
   );
 }
 
+/**
+ * MessageItem: Individual message component.
+ * Memoized so that typing in the chat room doesn't re-render existing messages.
+ */
+const MessageItem = memo(({ msg, isMe }) => {
+  return (
+    <div className={`flex items-start gap-3 w-full ${isMe ? 'flex-row-reverse' : ''}`}>
+      <div className="shrink-0">
+          <RemoteImage src={formatAvatarUrl(msg.userAvatarUrl)} className="h-10 w-10 rounded-2xl object-cover shadow-lg" />
+      </div>
+      <div className={`flex max-w-[80%] flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+        <div className={`rounded-[1.5rem] p-4 shadow-xl ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800'}`}>
+          {!isMe && <p title={msg.userName} className="mb-1 text-[10px] font-black uppercase opacity-40 truncate max-w-[150px]">{msg.userName}</p>}
+          {msg.content && <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>}
+          {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
+        </div>
+        <span className="mt-1 text-[9px] font-black uppercase opacity-30">{msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+      </div>
+    </div>
+  );
+});
+
+// --- MAIN PAGES ---
+
 function ChatRoom() {
   const { roomId } = useParams();
   const navigate = useNavigate();
@@ -187,7 +225,6 @@ function ChatRoom() {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // Sync inputs
   useEffect(() => {
     if (user) {
         setNewDisplayName(user.displayName || '');
@@ -195,7 +232,6 @@ function ChatRoom() {
     }
   }, [user]);
 
-  // Handle Profile Update Messaging Refresh Locally
   useEffect(() => {
     if (user && myUserId) {
         setMessages(prev => prev.map(m => String(m.userId) === String(myUserId) ? { ...m, userName: user.displayName, userAvatarUrl: user.avatarUrl } : m));
@@ -204,8 +240,6 @@ function ChatRoom() {
 
   useEffect(() => {
     if (!user) { navigate('/'); return; }
-    
-    // Only connect if not connected
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return;
 
     async function startChat() {
@@ -244,10 +278,8 @@ function ChatRoom() {
       } catch (err) { console.error(err); }
     }
     startChat();
-    return () => {
-        // Only cleanup on unmount or roomId change
-    };
-  }, [navigate, roomId]); // Removed user from dependency
+    return () => { };
+  }, [navigate, roomId]);
 
   async function handleUpdateProfile(e) {
     e.preventDefault();
@@ -339,24 +371,13 @@ function ChatRoom() {
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
-          {messages.map((msg, idx) => {
-            const isMe = String(msg.userId) === String(myUserId);
-            return (
-              <div key={msg.id || idx} className={`flex items-start gap-3 w-full ${isMe ? 'flex-row-reverse' : ''}`}>
-                <div className="shrink-0">
-                    <RemoteImage src={formatAvatarUrl(msg.userAvatarUrl)} className="h-10 w-10 rounded-2xl object-cover shadow-lg" />
-                </div>
-                <div className={`flex max-w-[80%] flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                  <div className={`rounded-[1.5rem] p-4 shadow-xl ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800'}`}>
-                    {!isMe && <p title={msg.userName} className="mb-1 text-[10px] font-black uppercase opacity-40 truncate max-w-[150px]">{msg.userName}</p>}
-                    {msg.content && <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>}
-                    {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
-                  </div>
-                  <span className="mt-1 text-[9px] font-black uppercase opacity-30">{msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
-                </div>
-              </div>
-            );
-          })}
+          {messages.map((msg, idx) => (
+            <MessageItem 
+                key={msg.id || idx} 
+                msg={msg} 
+                isMe={String(msg.userId) === String(myUserId)} 
+            />
+          ))}
           <div ref={messagesEndRef} />
         </div>
 
