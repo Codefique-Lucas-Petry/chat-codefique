@@ -1,36 +1,32 @@
-  import React, { useEffect, useRef, useState } from 'react';
-  import { HashRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { HashRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 
-  const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://unconsenting-unwhetted-ben.ngrok-free.dev').replace(/\/+$/, '');
-  const DEFAULT_HEADERS = {
-    'ngrok-skip-browser-warning': 'true',
-  };
-  const CHAT_UPLOAD_ENDPOINTS = [
-    '/uploads/file',
-    '/uploads/files',
-    '/uploads/message',
-    '/uploads/chat',
-    '/uploads/avatar',
-  ];
-  const INITIAL_VISIBLE_MESSAGES = 50;
-  const LOAD_MORE_MESSAGES_STEP = 50;
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://unconsenting-unwhetted-ben.ngrok-free.dev').replace(/\/+$/, '');
+const DEFAULT_HEADERS = {
+  'ngrok-skip-browser-warning': 'true',
+};
+const CHAT_UPLOAD_ENDPOINTS = [
+  '/uploads/chat',
+  '/uploads/file',
+  '/uploads/message',
+];
 
-  const formatAvatarUrl = (path) => {
-    if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
-    const cleanPath = path.trim();
-     let url = ''
-     if (cleanPath.startsWith('http')) {
-      url = cleanPath;
-     } else {
-      const pathWithSlash = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
-      url = `${BASE_URL}${pathWithSlash}`;
-     }
+const formatAvatarUrl = (path) => {
+  if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
+  const cleanPath = path.trim();
+  let url = ''
+  if (cleanPath.startsWith('http')) {
+    url = cleanPath;
+  } else {
+    const pathWithSlash = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+    url = `${BASE_URL}${pathWithSlash}`;
+  }
 
-     const separator = url.includes('?') ? '&': '?';
-     return `${url}${separator}ngrok-skip-browser-warning=1`
-  };
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}ngrok-skip-browser-warning=1`
+};
 
- const normalizeFileUrl = (value) => {
+const normalizeFileUrl = (value) => {
   if (!value || typeof value !== 'string') return '';
   let url = '';
   if (value.startsWith('http')) {
@@ -39,856 +35,502 @@
     const pathWithSlash = value.startsWith('/') ? value : `/${value}`;
     url = `${BASE_URL}${pathWithSlash}`;
   }
- 
+
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}ngrok-skip-browser-warning=1`;
 };
 
-  const getFileExtension = (value = '') => {
-    const cleanValue = value.split('?')[0].split('#')[0];
-    const parts = cleanValue.split('.');
-    return parts.length > 1 ? parts.pop().toLowerCase() : '';
-  };
+const getFileExtension = (value = '') => {
+  const cleanValue = value.split('?')[0].split('#')[0];
+  const parts = cleanValue.split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : '';
+};
 
-  const getAttachmentKind = ({ name = '', type = '', url = '' }) => {
-    const extension = getFileExtension(name || url);
-    const mime = type.toLowerCase();
+const getAttachmentKind = ({ name = '', type = '', url = '' }) => {
+  const extension = getFileExtension(name || url);
+  const mime = type.toLowerCase();
 
-    if (mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(extension)) {
-      return 'image';
+  if (mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(extension)) {
+    return 'image';
+  }
+
+  if (mime === 'application/pdf' || extension === 'pdf') {
+    return 'pdf';
+  }
+
+  return 'file';
+};
+
+const formatBytes = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+  return `${Math.round(bytes / 104857.6) / 10} MB`;
+};
+
+const getFileUrlFromResponse = (payload) => {
+  if (!payload || typeof payload !== 'object') return '';
+  const keys = ['fileUrl', 'url', 'avatarUrl'];
+  for (const key of keys) {
+    if (typeof payload[key] === 'string' && payload[key]) {
+      return normalizeFileUrl(payload[key]);
     }
+  }
+  return '';
+};
 
-    if (mime === 'application/pdf' || extension === 'pdf') {
-      return 'pdf';
+async function parseJsonResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    const responseText = await response.text();
+    const snippet = responseText.slice(0, 120).replace(/\s+/g, ' ').trim();
+    throw new Error(`Resposta invalida da API (${response.status}). Esperado JSON, recebido: ${snippet || 'vazio'}`);
+  }
+  return response.json();
+}
+
+async function apiFetch(path, options = {}) {
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      ...DEFAULT_HEADERS,
+      ...(options.headers || {}),
+    },
+  });
+  const data = await parseJsonResponse(response);
+  if (!response.ok) throw new Error(data?.error || data?.message || `Erro na requisicao`);
+  return data;
+}
+
+async function apiFetchOrDefault(path, fallbackValue) {
+  try {
+    return await apiFetch(path);
+  } catch (error) {
+    console.warn(`Falha ao carregar ${path}:`, error);
+    return fallbackValue;
+  }
+}
+
+function FileTypeIcon({ className = 'w-5 h-5' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M8 3.75h6.586a2 2 0 0 1 1.414.586l3.664 3.664a2 2 0 0 1 .586 1.414V18.25A2.75 2.75 0 0 1 17.5 21h-9A2.75 2.75 0 0 1 5.75 18.25V6.5A2.75 2.75 0 0 1 8.5 3.75Z" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M14.75 3.75v4.5h4.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8.75 14.25h6.5M8.75 17.25h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DownloadIcon({ className = 'w-5 h-5' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M12 4.75v9.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M8.75 11.75 12 15l3.25-3.25" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.75 18.25h12.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MenuIcon({ className = 'w-5 h-5' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M4.75 7.25h14.5M4.75 12h14.5M4.75 16.75h14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) {
+  const [resolvedSrc, setResolvedSrc] = useState(fallbackSrc);
+  useEffect(() => {
+    if (!src) {
+      setResolvedSrc(fallbackSrc);
+      return undefined;
     }
-
-    return 'file';
-  };
-
-  const formatBytes = (bytes) => {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
-    return `${Math.round(bytes / 104857.6) / 10} MB`;
-  };
-
-  const getFileUrlFromResponse = (payload) => {
-    if (!payload || typeof payload !== 'object') return '';
-
-    const keys = ['fileUrl', 'url', 'avatarUrl'];
-
-    for (const key of keys) {
-      if (typeof payload[key] === 'string' && payload[key]) {
-        return normalizeFileUrl(payload[key]);
+    let active = true;
+    let objectUrl = '';
+    async function loadImage() {
+      try {
+        const response = await fetch(src, { headers: DEFAULT_HEADERS });
+        if (!response.ok) throw new Error(`Status: ${response.status}`);
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (active) setResolvedSrc(objectUrl);
+      } catch {
+        if (active) setResolvedSrc(fallbackSrc);
       }
     }
+    loadImage();
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [fallbackSrc, src]);
+  return <img src={resolvedSrc} alt={alt} className={className} />;
+}
 
-    if (payload.file && typeof payload.file === 'object') {
-      for (const key of keys) {
-        if (typeof payload.file[key] === 'string' && payload.file[key]) {
-          return normalizeFileUrl(payload.file[key]);
-        }
-      }
-    }
-
-    return '';
-  };
-
-  async function parseJsonResponse(response) {
-    const contentType = response.headers.get('content-type') || '';
-
-    if (!contentType.toLowerCase().includes('application/json')) {
-      const responseText = await response.text();
-      const snippet = responseText.slice(0, 120).replace(/\s+/g, ' ').trim();
-      throw new Error(
-        `Resposta invalida da API (${response.status}) em ${response.url}. Esperado JSON, recebido: ${snippet || 'vazio'}`,
-      );
-    }
-
-    return response.json();
-  }
-
-  async function apiFetch(path, options = {}) {
-    const response = await fetch(`${BASE_URL}${path}`, {
-      ...options,
-      headers: {
-        ...DEFAULT_HEADERS,
-        ...(options.headers || {}),
-      },
-    });
-
-    const data = await parseJsonResponse(response);
-
-    if (!response.ok) {
-      throw new Error(data?.message || `Erro na requisicao para ${path}`);
-    }
-
-    return data;
-  }
-
-  async function apiFetchOrDefault(path, fallbackValue) {
-    try {
-      return await apiFetch(path);
-    } catch (error) {
-      console.warn(`Falha ao carregar ${path}:`, error);
-      return fallbackValue;
-    }
-  }
-
-  function FileTypeIcon({ className = 'w-5 h-5' }) {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-        <path
-          d="M8 3.75h6.586a2 2 0 0 1 1.414.586l3.664 3.664a2 2 0 0 1 .586 1.414V18.25A2.75 2.75 0 0 1 17.5 21h-9A2.75 2.75 0 0 1 5.75 18.25V6.5A2.75 2.75 0 0 1 8.5 3.75Z"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <path d="M14.75 3.75v4.5h4.5" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M8.75 14.25h6.5M8.75 17.25h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      </svg>
-    );
-  }
-
-  function DownloadIcon({ className = 'w-5 h-5' }) {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-        <path d="M12 4.75v9.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-        <path d="M8.75 11.75 12 15l3.25-3.25" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M5.75 18.25h12.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      </svg>
-    );
-  }
-
-  function MenuIcon({ className = 'w-5 h-5' }) {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-        <path d="M4.75 7.25h14.5M4.75 12h14.5M4.75 16.75h14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
-    );
-  }
-
-  function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) {
-    const [resolvedSrc, setResolvedSrc] = useState(fallbackSrc);
-
-    useEffect(() => {
-      if (!src) {
-        setResolvedSrc(fallbackSrc);
-        return undefined;
-      }
-
-      let active = true;
-      let objectUrl = '';
-
-      async function loadImage() {
-        try {
-          const response = await fetch(src, { headers: DEFAULT_HEADERS });
-
-          if (!response.ok) {
-            throw new Error(`Falha ao carregar imagem: ${response.status}`);
-          }
-
-          const blob = await response.blob();
-          objectUrl = URL.createObjectURL(blob);
-
-          if (!active) {
-            URL.revokeObjectURL(objectUrl);
-            return;
-          }
-
-          setResolvedSrc(objectUrl);
-        } catch {
-          if (active) {
-            setResolvedSrc(fallbackSrc);
-          }
-        }
-      }
-
-      loadImage();
-
-      return () => {
-        active = false;
-        if (objectUrl) {
-          URL.revokeObjectURL(objectUrl);
-        }
-      };
-    }, [fallbackSrc, src]);
-
-    return <img src={resolvedSrc} alt={alt} className={className} />;
-  }
-
-  function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
-    if (!attachment) return null;
-
-    const kind = getAttachmentKind(attachment);
-    const previewUrl = attachment.previewUrl || attachment.url;
-    const wrapperClass = compact
-      ? 'rounded-[1.5rem] border border-slate-700/60 bg-slate-900/80 p-3'
-      : 'rounded-[1.75rem] border border-slate-700/60 bg-slate-900/80 p-3 sm:p-4';
-
-    return (
-      <div className={wrapperClass}>
-        {kind === 'image' && (
-          <img
-            src={previewUrl}
-            alt={attachment.name || 'Imagem anexada'}
-            className={`w-full rounded-[1.25rem] object-cover ${compact ? 'max-h-32' : 'max-h-44'}`}
-          />
-        )}
-
-        {kind === 'pdf' && (
-          <div className={`flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-3 sm:p-4 ${compact ? 'min-h-24' : 'min-h-28'}`}>
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-500/15 text-red-300">
-              <span className="text-xs font-black uppercase tracking-widest">PDF</span>
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-slate-100">{attachment.name || 'Documento PDF'}</p>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Primeira pagina disponivel ao abrir</p>
-            </div>
-            <a
-              href={previewUrl}
-              target="_blank"
-              rel="noreferrer"
-              download={attachment.name}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-600 text-slate-200 transition hover:border-slate-400 hover:text-white"
-              aria-label="Baixar PDF"
-            >
-              <DownloadIcon className="w-5 h-5" />
-            </a>
-          </div>
-        )}
-
-        {kind === 'file' && (
-          <div className="flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-3 sm:p-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-700 text-slate-200">
-              <FileTypeIcon className="w-6 h-6" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-slate-100">{attachment.name || 'Arquivo'}</p>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                {attachment.type || getFileExtension(attachment.name || attachment.url) || 'Arquivo'}
-              </p>
-            </div>
-          </div>
-        )}
-
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-bold text-slate-100">{attachment.name || 'Anexo'}</p>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{formatBytes(attachment.size)}</p>
-          </div>
-          {onRemove && (
-            <button
-              type="button"
-              onClick={onRemove}
-              className="rounded-full border border-slate-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-300 transition hover:border-red-500 hover:text-red-400"
-            >
-              Remover
-            </button>
-          )}
+function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
+  if (!attachment) return null;
+  const kind = getAttachmentKind(attachment);
+  const previewUrl = attachment.previewUrl || attachment.url;
+  const wrapperClass = compact ? 'rounded-[1.5rem] border border-slate-700/60 bg-slate-900/80 p-3' : 'rounded-[1.75rem] border border-slate-700/60 bg-slate-900/80 p-3 sm:p-4';
+  return (
+    <div className={wrapperClass}>
+      {kind === 'image' && <img src={previewUrl} alt="Preview" className={`w-full rounded-[1.25rem] object-cover ${compact ? 'max-h-32' : 'max-h-44'}`} />}
+      {kind === 'pdf' && (
+        <div className="flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-3 sm:p-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-500/15 text-red-300"><span className="text-xs font-black">PDF</span></div>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{attachment.name}</p></div>
         </div>
+      )}
+      <div className="mt-3 flex items-center justify-between">
+        <div className="min-w-0"><p className="truncate text-sm font-bold">{attachment.name}</p><p className="text-[10px] font-black uppercase text-slate-500">{formatBytes(attachment.size)}</p></div>
+        {onRemove && <button onClick={onRemove} className="rounded-full border border-slate-600 px-3 py-2 text-[10px] font-black text-slate-300 hover:text-red-400">Remover</button>}
       </div>
-    );
-  }
+    </div>
+  );
+}
 
-  function MessageAttachment({ fileUrl, fileName }) {
-    const normalizedUrl = normalizeFileUrl(fileUrl);
-    if (!normalizedUrl) return null;
+function MessageAttachment({ fileUrl, fileName }) {
+  const normalizedUrl = normalizeFileUrl(fileUrl);
+  if (!normalizedUrl) return null;
+  const kind = getAttachmentKind({ name: fileName, url: normalizedUrl });
+  if (kind === 'image') return <a href={normalizedUrl} target="_blank" rel="noreferrer" className="mt-3 block"><RemoteImage src={normalizedUrl} className="max-h-56 w-full rounded-[1.5rem] object-cover" /></a>;
+  return (
+    <a href={normalizedUrl} target="_blank" rel="noreferrer" className="mt-3 flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-900/70 p-4">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-700 text-slate-200"><FileTypeIcon /></div>
+      <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{fileName || 'Arquivo'}</p></div>
+    </a>
+  );
+}
 
-    const kind = getAttachmentKind({ name: fileName, url: normalizedUrl });
+function ChatRoom() {
+  const { roomId } = useParams();
+  const navigate = useNavigate();
 
-    if (kind === 'image') {
-      return (
-        <a href={normalizedUrl} target="_blank" rel="noreferrer" className="mt-3 block">
-          <RemoteImage
-            src={normalizedUrl}
-            alt={fileName || 'Imagem enviada'}
-            className="max-h-56 w-full rounded-[1.5rem] object-cover"
-            fallbackSrc="https://ui-avatars.com/api/?name=Imagem&background=random"
-          />
-        </a>
-      );
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('@Chat:User');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [messages, setMessages] = useState([]);
+  const [participants, setParticipants] = useState([]);
+  const [inputValue, setInputValue] = useState('');
+  const [myUserId, setMyUserId] = useState(null);
+  const [attachment, setAttachment] = useState(null);
+  const [sendingAttachment, setSendingAttachment] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  // Settings Modal States
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [newDisplayName, setNewDisplayName] = useState(user?.displayName || '');
+  const [newPassword, setNewPassword] = useState(user?.password || '');
+  const [newAvatarFile, setNewAvatarFile] = useState(null);
+  const [updatingProfile, setUpdatingProfile] = useState(false);
+
+  const socketRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const initialized = useRef(false);
+  const fileInputRef = useRef(null);
+  const avatarInputRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!user) { navigate('/'); return; }
+    if (initialized.current) return;
+    initialized.current = true;
+
+    async function startChat() {
+      try {
+        const sessionData = await apiFetch('/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: user.username, password: user.password, roomId }),
+        });
+        setMyUserId(sessionData.userId);
+
+        const [history, parts] = await Promise.all([
+          apiFetchOrDefault(`/rooms/${roomId}/messages`, { messages: [] }),
+          apiFetchOrDefault(`/rooms/${roomId}/participants`, { participants: [] }),
+        ]);
+        setMessages(history.messages || []);
+        setParticipants(parts.participants || []);
+
+        const socket = new WebSocket(sessionData.wsUrl);
+        socketRef.current = socket;
+        socket.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          switch (data.type) {
+            case 'room.joined': setParticipants(data.participants || []); break;
+            case 'message.new': setMessages((prev) => [...prev, data.message]); break;
+            case 'participant.status_change':
+              setParticipants((prev) => {
+                const exists = prev.find(p => p.id === data.participantId);
+                if (exists) {
+                  return prev.map(p => p.id === data.participantId ? { ...p, ...data.participant, status: data.status } : p);
+                }
+                return data.participant ? [...prev, { ...data.participant, status: data.status }] : prev;
+              });
+              // Update message avatars/names if they changed
+              if (data.participant) {
+                setMessages(prev => prev.map(m => m.userId === data.participantId ? { ...m, userName: data.participant.displayName, userAvatarUrl: data.participant.avatarUrl } : m));
+              }
+              break;
+          }
+        };
+      } catch (err) { console.error(err); }
     }
+    startChat();
+    return () => socketRef.current?.close();
+  }, [navigate, roomId, user]);
 
-    if (kind === 'pdf') {
-      return (
-        <div className="mt-3 flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-900/70 p-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-500/15 text-red-300">
-            <span className="text-xs font-black uppercase tracking-widest">PDF</span>
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold">{fileName || 'PDF anexado'}</p>
-            <p className="text-[10px] font-black uppercase tracking-widest opacity-50">Abrir arquivo</p>
-          </div>
-          <a
-            href={`${normalizedUrl}#page=1`}
-            target="_blank"
-            rel="noreferrer"
-            download={fileName}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-600 text-slate-200 transition hover:border-slate-400 hover:text-white"
-            aria-label="Baixar PDF"
-          >
-            <DownloadIcon className="w-5 h-5" />
-          </a>
-        </div>
-      );
-    }
+  async function handleUpdateProfile(e) {
+    e.preventDefault();
+    setUpdatingProfile(true);
+    try {
+      let avatarUrl = user.avatarUrl;
 
-    return (
-      <a
-        href={normalizedUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-3 flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-900/70 p-4"
-      >
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-700 text-slate-200">
-          <FileTypeIcon className="w-6 h-6" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold">{fileName || 'Arquivo anexado'}</p>
-          <p className="text-[10px] font-black uppercase tracking-widest opacity-50">Abrir arquivo</p>
-        </div>
-      </a>
-    );
-  }
-
-  function ChatRoom() {
-    const { roomId } = useParams();
-    const navigate = useNavigate();
-
-    const [user] = useState(() => {
-      const saved = localStorage.getItem('@Chat:User');
-      return saved ? JSON.parse(saved) : null;
-    });
-
-    const [messages, setMessages] = useState([]);
-    const [participants, setParticipants] = useState([]);
-    const [inputValue, setInputValue] = useState('');
-    const [myUserId, setMyUserId] = useState(null);
-    const [attachment, setAttachment] = useState(null);
-    const [sendingAttachment, setSendingAttachment] = useState(false);
-    const [sidebarOpen, setSidebarOpen] = useState(false);
-    const [visibleMessagesCount, setVisibleMessagesCount] = useState(INITIAL_VISIBLE_MESSAGES);
-
-    const socketRef = useRef(null);
-    const messagesEndRef = useRef(null);
-    const initialized = useRef(false);
-    const fileInputRef = useRef(null);
-
-    useEffect(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
-
-    useEffect(() => () => {
-      if (attachment?.previewUrl?.startsWith('blob:')) {
-        URL.revokeObjectURL(attachment.previewUrl);
-      }
-    }, [attachment]);
-
-    useEffect(() => {
-      if (!user) {
-        navigate('/');
-        return;
+      if (newAvatarFile) {
+        const formData = new FormData();
+        formData.append('file', newAvatarFile);
+        const uploadRes = await fetch(`${BASE_URL}/uploads/avatar`, {
+          method: 'POST',
+          headers: DEFAULT_HEADERS,
+          body: formData,
+        });
+        const uploadData = await parseJsonResponse(uploadRes);
+        avatarUrl = uploadData.avatarUrl;
       }
 
-      async function startChat() {
-        if (initialized.current) return;
-        initialized.current = true;
-
-        try {
-          const sessionData = await apiFetch('/sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 
-              'application/json',
-            },
-            body: JSON.stringify({
-              username: user.username,
-              password: user.password,
-              roomId,
-            }),
-          });
-          setMyUserId(sessionData.userId);
-
-          const [historyData, partData] = await Promise.all([
-            apiFetchOrDefault(`/rooms/${roomId}/messages`, { messages: [] }),
-            apiFetchOrDefault(`/rooms/${roomId}/participants`, { participants: [] }),
-          ]);
-          setMessages(historyData.messages || []);
-          setVisibleMessagesCount(INITIAL_VISIBLE_MESSAGES);
-          setParticipants(partData.participants || []);
-
-          const socket = new WebSocket(sessionData.wsUrl);
-          socketRef.current = socket;
-
-          socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-
-            switch (data.type) {
-              case 'room.joined':
-                setParticipants(data.participants || []);
-                break;
-
-              case 'message.new':
-                setMessages((prev) => [...prev, data.message]);
-                setVisibleMessagesCount((prev) => prev + 1);
-                break;
-
-              case 'participant.status_change':
-                setParticipants((prev) => {
-                  const userExists = prev.find((participant) => participant.id === data.participantId);
-
-                  if (userExists) {
-                    return prev.map((participant) =>
-                      participant.id === data.participantId ? { ...participant, status: data.status } : participant,
-                    );
-                  }
-
-                  if (data.participant) {
-                    return [...prev, { ...data.participant, status: data.status }];
-                  }
-
-                  return prev;
-                });
-                break;
-
-              case 'error':
-                console.error('Erro do servidor:', data.message);
-                break;
-
-              default:
-                break;
-            }
-          };
-        } catch (err) {
-          console.error('Erro ao inicializar chat:', err);
-        }
-      }
-
-      startChat();
-
-      return () => {
-        if (socketRef.current) socketRef.current.close();
-      };
-    }, [navigate, roomId, user]);
-
-    useEffect(() => {
-      setSidebarOpen(false);
-    }, [roomId]);
-
-    const hasHiddenMessages = messages.length > visibleMessagesCount;
-    const visibleMessages = hasHiddenMessages ? messages.slice(-visibleMessagesCount) : messages;
-
-    function showMoreMessages() {
-      setVisibleMessagesCount((prev) => Math.min(prev + LOAD_MORE_MESSAGES_STEP, messages.length));
-    }
-
-    function clearAttachment() {
-      if (attachment?.previewUrl?.startsWith('blob:')) {
-        URL.revokeObjectURL(attachment.previewUrl);
-      }
-      setAttachment(null);
-    }
-
-    function handleAttachmentChange(event) {
-      const selectedFile = event.target.files?.[0];
-      if (!selectedFile) return;
-
-      if (attachment?.previewUrl?.startsWith('blob:')) {
-        URL.revokeObjectURL(attachment.previewUrl);
-      }
-
-      setAttachment({
-        file: selectedFile,
-        name: selectedFile.name,
-        size: selectedFile.size,
-        type: selectedFile.type,
-        previewUrl: URL.createObjectURL(selectedFile),
+      const updated = await apiFetch('/users/update', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: myUserId,
+          displayName: newDisplayName,
+          password: newPassword,
+          avatarUrl
+        })
       });
 
-      event.target.value = '';
+      const updatedUser = { ...user, ...updated, password: newPassword };
+      setUser(updatedUser);
+      localStorage.setItem('@Chat:User', JSON.stringify(updatedUser));
+      setIsSettingsOpen(false);
+      alert("Perfil atualizado!");
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setUpdatingProfile(false);
     }
+  }
 
-    async function uploadAttachment(file) {
-      for (const endpoint of CHAT_UPLOAD_ENDPOINTS) {
+  async function sendMessage(event) {
+    event.preventDefault();
+    if ((!inputValue.trim() && !attachment) || !socketRef.current) return;
+    try {
+      let fileUrl = '';
+      if (attachment?.file) {
+        setSendingAttachment(true);
         const formData = new FormData();
-        formData.append('file', file);
-
-        try {
-          const response = await fetch(`${BASE_URL}${endpoint}`, {
-            method: 'POST',
-            headers: DEFAULT_HEADERS,
-            body: formData,
-          });
-
-          if (!response.ok) continue;
-
-          const payload = await parseJsonResponse(response);
-          const fileUrl = getFileUrlFromResponse(payload);
-
-          if (fileUrl) {
-            return fileUrl;
-          }
-        } catch {
-          continue;
-        }
+        formData.append('file', attachment.file);
+        const res = await fetch(`${BASE_URL}/uploads/chat`, { method: 'POST', headers: DEFAULT_HEADERS, body: formData });
+        const data = await parseJsonResponse(res);
+        fileUrl = getFileUrlFromResponse(data);
       }
+      socketRef.current.send(JSON.stringify({ type: 'message.send', content: inputValue.trim(), fileUrl, fileName: attachment?.name }));
+      setInputValue('');
+      setAttachment(null);
+    } catch (error) { alert(error.message); } finally { setSendingAttachment(false); }
+  }
 
-      throw new Error('Nao foi possivel enviar o arquivo.');
-    }
+  if (!user) return null;
 
-    async function sendMessage(event) {
-      event.preventDefault();
-      if ((!inputValue.trim() && !attachment) || !socketRef.current) return;
+  return (
+    <div className="flex h-dvh overflow-hidden bg-slate-950 font-sans text-slate-200 antialiased">
+      {/* Sidebar Mobile Overlay */}
+      <div className={`absolute inset-0 z-30 bg-slate-950/70 backdrop-blur-sm transition-opacity md:hidden ${sidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`} onClick={() => setSidebarOpen(false)} />
 
-      try {
-        let fileUrl = '';
+      {/* Sidebar */}
+      <aside className={`absolute inset-y-0 left-0 z-40 flex w-80 flex-col border-r border-slate-800 bg-slate-900 transition-transform md:static md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="border-b border-slate-800 p-6">
+          <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2>
+          <p className="text-xl font-black text-white">#{roomId}</p>
+        </div>
 
-        if (attachment?.file) {
-          setSendingAttachment(true);
-          fileUrl = await uploadAttachment(attachment.file);
-        }
-
-        socketRef.current.send(JSON.stringify({
-          type: 'message.send',
-          content: inputValue.trim(),
-          fileUrl,
-          fileName: attachment?.name || undefined,
-        }));
-
-        setInputValue('');
-        clearAttachment();
-      } catch (error) {
-        alert(error.message);
-      } finally {
-        setSendingAttachment(false);
-      }
-    }
-
-    if (!user) return null;
-
-    const sortedParticipants = [...participants].sort((a, b) => {
-      if (a.status === 'online' && b.status !== 'online') return -1;
-      if (a.status !== 'online' && b.status === 'online') return 1;
-      return 0;
-    });
-
-    return (
-      <div className="flex h-dvh overflow-hidden bg-slate-950 font-sans text-slate-200 antialiased">
-        <div
-          className={`absolute inset-0 z-30 bg-slate-950/70 backdrop-blur-sm transition-opacity md:hidden ${sidebarOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`}
-          onClick={() => setSidebarOpen(false)}
-        />
-
-        <aside
-          className={`absolute inset-y-0 left-0 z-40 flex w-[min(84vw,20rem)] max-w-80 flex-col border-r border-slate-800 bg-slate-900 shadow-2xl transition-transform duration-300 md:static md:w-80 md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
-        >
-          <div className="border-b border-slate-800 p-5 md:p-10">
-            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2>
-            <p className="text-xl font-black text-white">#{roomId}</p>
-          </div>
-
-          <div className="flex-1 space-y-6 overflow-y-auto p-5 md:p-10">
-            <p className="px-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-              Participantes ({participants.length})
-            </p>
-            <div className="space-y-4">
-              {sortedParticipants.map((participant) => (
-                <div
-                  key={participant.id}
-                  className={`flex items-center space-x-4 rounded-xl p-2 transition-all ${participant.status === 'online' ? 'opacity-100' : 'grayscale-[0.5] opacity-40'}`}
-                >
-                  <div className="relative">
-                    <RemoteImage
-                      src={formatAvatarUrl(participant.avatarUrl)}
-                      className="h-10 w-10 rounded-2xl object-cover ring-2 ring-slate-800"
-                      alt={participant.displayName || participant.username || 'Avatar'}
-                    />
-                    <div
-                      className={`absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-4 border-slate-900 ${participant.status === 'online' ? 'bg-emerald-500' : 'bg-slate-600'}`}
-                    />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className={`text-sm font-bold ${participant.id === myUserId ? 'text-indigo-400' : 'text-slate-300'}`}>
-                      {participant.displayName || participant.username} {participant.id === myUserId && ' (Voce)'}
-                    </span>
-                    <span className="text-[9px] font-black uppercase tracking-tighter opacity-50">
-                      {participant.status === 'online' ? 'Online' : 'Offline'}
-                    </span>
-                  </div>
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Participantes ({participants.length})</p>
+          <div className="space-y-4">
+            {participants.map((p) => (
+              <div key={p.id} className={`flex items-center gap-4 transition-opacity ${p.status === 'online' ? 'opacity-100' : 'opacity-40'}`}>
+                <div className="relative">
+                  <RemoteImage src={formatAvatarUrl(p.avatarUrl)} className="h-10 w-10 rounded-2xl object-cover ring-2 ring-slate-800" />
+                  <div className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-slate-900 ${p.status === 'online' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
                 </div>
-              ))}
-            </div>
+                <div className="flex flex-col min-w-0">
+                  <span className={`truncate text-sm font-bold ${p.id === myUserId ? 'text-indigo-400' : 'text-slate-200'}`}>{p.displayName || p.username}</span>
+                  <span className="text-[9px] font-black uppercase opacity-50">{p.status}</span>
+                </div>
+              </div>
+            ))}
           </div>
+        </div>
 
-          <div className="p-5 md:p-6">
-            <button
-              onClick={() => {
-                localStorage.clear();
-                window.location.href = '/';
-              }}
-              className="w-full rounded-2xl bg-slate-800 py-4 text-[10px] font-black uppercase transition-all hover:bg-red-500/20 hover:text-red-500"
-            >
-              Sair da Conta
-            </button>
-          </div>
-        </aside>
+        <div className="p-6 space-y-2 border-t border-slate-800">
+          <button onClick={() => setIsSettingsOpen(true)} className="w-full rounded-xl bg-slate-800 py-3 text-[10px] font-black uppercase hover:bg-slate-700">Editar Perfil</button>
+          <button onClick={() => { localStorage.clear(); window.location.href = '/'; }} className="w-full rounded-xl bg-red-500/10 py-3 text-[10px] font-black uppercase text-red-500 hover:bg-red-500/20">Sair</button>
+        </div>
+      </aside>
 
-        <main className="flex min-w-0 flex-1 flex-col bg-[#0b0f1a]">
-          <div className="border-b border-slate-800/80 bg-slate-950/50 px-4 py-3 backdrop-blur md:hidden">
-            <div className="flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(true)}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-700 bg-slate-900/80 text-slate-100"
-                aria-label="Abrir participantes"
-              >
-                <MenuIcon className="h-5 w-5" />
+      {/* Main Chat Area */}
+      <main className="flex flex-1 flex-col bg-[#0b0f1a]">
+        {/* Mobile Header */}
+        <header className="flex items-center justify-between border-b border-slate-800/80 bg-slate-950/50 p-4 md:hidden">
+          <button onClick={() => setSidebarOpen(true)} className="rounded-xl border border-slate-700 p-2"><MenuIcon /></button>
+          <span className="font-black">#{roomId}</span>
+          <div className="w-10" />
+        </header>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
+          {messages.map((msg, idx) => {
+            const isMe = msg.userId === myUserId;
+            return (
+              <div key={msg.id || idx} className={`flex items-start gap-3 ${isMe ? 'flex-row-reverse' : ''}`}>
+                <RemoteImage src={formatAvatarUrl(msg.userAvatarUrl)} className="h-10 w-10 rounded-2xl object-cover shadow-lg" />
+                <div className={`flex max-w-[80%] flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className={`rounded-[1.5rem] p-4 shadow-xl ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800'}`}>
+                    {!isMe && <p className="mb-1 text-[10px] font-black uppercase opacity-40">{msg.userName}</p>}
+                    {msg.content && <p className="text-sm leading-relaxed">{msg.content}</p>}
+                    {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
+                  </div>
+                  <span className="mt-1 text-[9px] font-black uppercase opacity-30">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              </div>
+            );
+          })}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input area */}
+        <div className="border-t border-slate-800 bg-slate-900/50 p-4 md:p-10">
+          <form onSubmit={sendMessage} className="mx-auto max-w-4xl space-y-4">
+            {attachment && <AttachmentPreviewCard attachment={attachment} onRemove={() => setAttachment(null)} />}
+            <div className="flex items-center gap-3 rounded-[2rem] border border-slate-700/50 bg-slate-800 p-2 pr-4">
+              <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => {
+                const f = e.target.files[0];
+                if (f) setAttachment({ file: f, name: f.name, size: f.size, type: f.type, previewUrl: URL.createObjectURL(f) });
+              }} />
+              <button type="button" onClick={() => fileInputRef.current?.click()} className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-700 text-slate-400 hover:text-white">
+                <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" strokeLinecap="round" /></svg>
               </button>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-500">Sala</p>
-                <p className="truncate text-base font-black text-white">#{roomId}</p>
-              </div>
-              <div className="rounded-full border border-slate-700 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-slate-300">
-                {participants.length}
-              </div>
+              <input type="text" className="flex-1 bg-transparent py-3 outline-none placeholder:text-slate-600" placeholder="Digite uma mensagem..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
+              <button disabled={sendingAttachment} className="rounded-2xl bg-indigo-600 px-6 py-3 text-[10px] font-black uppercase tracking-widest disabled:opacity-50">
+                {sendingAttachment ? '...' : 'Enviar'}
+              </button>
             </div>
-          </div>
+          </form>
+        </div>
+      </main>
 
-          <div className="flex-1 space-y-4 overflow-y-auto px-3 py-4 sm:px-4 md:space-y-8 md:p-8 xl:p-12">
-            {hasHiddenMessages && (
-              <div className="flex justify-center pb-2">
-                <button
-                  type="button"
-                  onClick={showMoreMessages}
-                  className="rounded-full border border-slate-700 bg-slate-900/80 px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-slate-300 transition hover:border-slate-500 hover:text-white"
-                >
-                  Carregar anteriores
-                </button>
-              </div>
-            )}
-
-            {visibleMessages.map((msg, idx) => {
-              const isMe = msg.userId === myUserId;
-
-              return (
-                <div key={msg.id || idx} className={`flex items-start gap-3 md:gap-5 ${isMe ? 'flex-row-reverse' : ''}`}>
-                  <RemoteImage
-                    src={formatAvatarUrl(msg.userAvatarUrl)}
-                    className="h-10 w-10 shrink-0 rounded-2xl border border-slate-800 object-cover shadow-2xl md:h-12 md:w-12"
-                    alt={msg.userName || 'Avatar'}
-                  />
-                  <div className={`flex min-w-0 max-w-[88%] flex-col sm:max-w-[78%] md:max-w-[65%] ${isMe ? 'items-end' : 'items-start'}`}>
-                    <div
-                      className={`w-full min-w-0 rounded-[1.5rem] px-3 py-3 shadow-2xl md:rounded-[2rem] md:px-4 md:py-4 ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800 text-slate-100'}`}
-                    >
-                      {!isMe && <p className="mb-1 text-[10px] font-black uppercase tracking-widest opacity-40">{msg.userName}</p>}
-                      {msg.content && <p className="break-words text-sm font-medium leading-relaxed md:text-base">{msg.content}</p>}
-                      {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
-                    </div>
-                    <span className="mt-2 px-2 text-[9px] font-black uppercase tracking-widest text-slate-600">
-                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-[2.5rem] border border-slate-800 bg-slate-900 p-8 shadow-2xl">
+            <h2 className="mb-6 text-xl font-black text-white">Configurações de Perfil</h2>
+            <form onSubmit={handleUpdateProfile} className="space-y-5">
+              <div className="flex flex-col items-center gap-4 mb-4">
+                <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
+                  <RemoteImage src={newAvatarFile ? URL.createObjectURL(newAvatarFile) : formatAvatarUrl(user.avatarUrl)} className="h-24 w-24 rounded-[2rem] object-cover ring-4 ring-slate-800 group-hover:opacity-50 transition-opacity" />
+                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="text-[10px] font-black uppercase">Trocar</span>
                   </div>
+                  <input type="file" className="hidden" ref={avatarInputRef} accept="image/*" onChange={e => setNewAvatarFile(e.target.files[0])} />
                 </div>
-              );
-            })}
-            <div ref={messagesEndRef} />
-          </div>
+              </div>
 
-          <div className="border-t border-slate-800 bg-slate-900/50 px-3 py-3 backdrop-blur-xl sm:px-4 md:p-6 xl:p-10">
-            <form onSubmit={sendMessage} className="mx-auto max-w-5xl space-y-3 md:space-y-4">
-              {attachment && <AttachmentPreviewCard attachment={attachment} onRemove={clearAttachment} />}
+              <div className="space-y-1">
+                <label className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Nome de Exibição</label>
+                <input type="text" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 outline-none focus:ring-2 focus:ring-indigo-500" value={newDisplayName} onChange={e => setNewDisplayName(e.target.value)} />
+              </div>
 
-              <div className="flex items-end gap-2 rounded-[1.75rem] border border-slate-700/50 bg-slate-800 p-2 shadow-2xl md:items-center md:gap-3 md:rounded-[2rem] md:pr-4">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  accept="image/*,application/pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
-                  onChange={handleAttachmentChange}
-                />
+              <div className="space-y-1">
+                <label className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Nova Senha</label>
+                <input type="password" placeholder="Mantenha vazio para não alterar" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 outline-none focus:ring-2 focus:ring-indigo-500" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+              </div>
 
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[1.2rem] border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white md:h-14 md:w-14 md:rounded-[1.5rem]"
-                  aria-label="Anexar arquivo"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" aria-hidden="true">
-                    <path
-                      d="M8.75 12.75 15.5 6a3 3 0 1 1 4.243 4.243l-8.132 8.132a5 5 0 1 1-7.071-7.071l8.485-8.486"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
-
-                <input
-                  type="text"
-                  className="min-w-0 flex-1 bg-transparent px-1 py-3 text-sm outline-none placeholder:text-slate-600 md:px-2 md:py-5"
-                  placeholder={`Mensagem em #${roomId}...`}
-                  value={inputValue}
-                  onChange={(event) => setInputValue(event.target.value)}
-                />
-
-                <button
-                  disabled={sendingAttachment}
-                  className="shrink-0 rounded-[1.2rem] bg-indigo-600 px-4 py-3 text-[10px] font-black tracking-widest text-white transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 hover:bg-indigo-500 md:rounded-[1.5rem] md:px-8 md:py-4"
-                >
-                  <span className="hidden sm:inline">{sendingAttachment ? 'ENVIANDO...' : 'ENVIAR'}</span>
-                  <span className="sm:hidden">{sendingAttachment ? '...' : 'OK'}</span>
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setIsSettingsOpen(false)} className="flex-1 rounded-2xl border border-slate-700 py-4 text-[10px] font-black uppercase text-slate-400 hover:bg-slate-800">Cancelar</button>
+                <button disabled={updatingProfile} className="flex-1 rounded-2xl bg-indigo-600 py-4 text-[10px] font-black uppercase text-white hover:bg-indigo-500 disabled:opacity-50">
+                  {updatingProfile ? 'Salvando...' : 'Salvar'}
                 </button>
               </div>
             </form>
           </div>
-        </main>
-      </div>
-    );
-  }
-
-  function Login() {
-    const navigate = useNavigate();
-    const [isRegistering, setIsRegistering] = useState(false);
-    const [email, setEmail] = useState('');
-    const [name, setName] = useState('');
-    const [displayName, setDisplayName] = useState('');
-    const [password, setPassword] = useState('');
-    const [roomId, setRoomId] = useState('');
-    const [avatarFile, setAvatarFile] = useState(null);
-    const [loading, setLoading] = useState(false);
-
-    async function handleSubmit(event) {
-      event.preventDefault();
-      setLoading(true);
-
-      try {
-        let avatarUrl = '';
-
-        if (isRegistering) {
-          if (!name || !password || !email) return alert('Preencha todos os campos.');
-
-          if (avatarFile) {
-            const formData = new FormData();
-            formData.append('file', avatarFile);
-            const uploadRes = await fetch(`${BASE_URL}/uploads/avatar`, {
-              method: 'POST',
-              headers: DEFAULT_HEADERS,
-              body: formData,
-            });
-            if (!uploadRes.ok) throw new Error('Erro no upload do avatar');
-            const uploadData = await parseJsonResponse(uploadRes);
-            avatarUrl = uploadData.avatarUrl;
-          }
-
-          await apiFetch('/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: name, displayName, password, email, avatarUrl }),
-          });
-
-          alert('Conta criada!');
-          setIsRegistering(false);
-        } else {
-          if (!name || !password || !roomId) return alert('Preencha Nome, Senha e ID da Sala.');
-
-          const sessionData = await apiFetch('/sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: name, password, roomId }),
-          });
-          localStorage.setItem('@Chat:User', JSON.stringify({
-            username: sessionData.user.username,
-            displayName: sessionData.user.displayName,
-            avatarUrl: sessionData.user.avatarUrl,
-            password,
-          }));
-          navigate(`/${roomId}`);
-        }
-      } catch (err) {
-        alert(err.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    return (
-      <div className="flex min-h-dvh flex-col items-center justify-center bg-slate-950 px-4 py-6 sm:p-6">
-        <div className="w-full max-w-[440px] rounded-[2rem] border border-slate-800 bg-slate-900 p-6 shadow-2xl sm:rounded-[2.5rem] sm:p-8 md:p-12">
-          <h1 className="mb-2 text-center text-3xl font-black text-white sm:text-4xl">Chat Connect</h1>
-          <p className="mb-8 text-center text-xs font-bold uppercase tracking-[0.24em] text-slate-500 sm:mb-10 sm:text-sm sm:tracking-widest">
-            {isRegistering ? 'Crie sua conta' : 'Acesse uma sala'}
-          </p>
-
-          <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
-            {isRegistering && (
-              <>
-                <input
-                  type="email"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
-                  placeholder="Seu E-mail"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-                <input
-                  type="text"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
-                  placeholder="Nome de Exibicao"
-                  value={displayName}
-                  onChange={(event) => setDisplayName(event.target.value)}
-                />
-              </>
-            )}
-
-            <input
-              type="text"
-              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
-              placeholder="Nome de Usuario"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-
-            <input
-              type="password"
-              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
-              placeholder="Sua Senha"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-
-            {!isRegistering && (
-              <input
-                type="text"
-                className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3.5 text-sm text-white outline-none focus:ring-2 focus:ring-indigo-500 sm:p-4 sm:text-base"
-                placeholder="ID da Sala"
-                value={roomId}
-                onChange={(event) => setRoomId(event.target.value)}
-              />
-            )}
-
-            {isRegistering && (
-              <label className="flex h-28 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700 bg-slate-800 transition-all hover:bg-slate-800/50 sm:h-32">
-                <span className="px-4 text-center text-xs font-bold text-slate-500">
-                  {avatarFile ? avatarFile.name : 'Foto de perfil (opcional)'}
-                </span>
-                <input type="file" className="hidden" accept="image/*" onChange={(event) => setAvatarFile(event.target.files[0])} />
-              </label>
-            )}
-
-            <button disabled={loading} className="w-full rounded-2xl bg-indigo-600 py-4 text-sm font-black text-white shadow-xl transition-all active:scale-95 sm:py-5 sm:text-base">
-              {loading ? 'PROCESSANDO...' : isRegistering ? 'CRIAR CONTA' : 'ENTRAR NO CHAT'}
-            </button>
-          </form>
-
-          <div className="mt-8 text-center">
-            <button onClick={() => setIsRegistering(!isRegistering)} className="text-[11px] font-black uppercase tracking-[0.18em] text-indigo-400 hover:underline sm:text-xs sm:tracking-widest">
-              {isRegistering ? 'Ja tenho conta? Login' : 'Nao tem conta? Cadastre-se'}
-            </button>
-          </div>
         </div>
-      </div>
-    );
+      )}
+    </div>
+  );
+}
+
+// ... Login and App components remain mostly the same as your provided text ...
+
+function Login() {
+  const navigate = useNavigate();
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [roomId, setRoomId] = useState('');
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setLoading(true);
+    try {
+      let avatarUrl = '';
+      if (isRegistering) {
+        if (!name || !password || !email) throw new Error('Preencha os campos obrigatórios');
+        if (avatarFile) {
+          const formData = new FormData();
+          formData.append('file', avatarFile);
+          const uploadRes = await fetch(`${BASE_URL}/uploads/avatar`, { method: 'POST', headers: DEFAULT_HEADERS, body: formData });
+          const uploadData = await parseJsonResponse(uploadRes);
+          avatarUrl = uploadData.avatarUrl;
+        }
+        await apiFetch('/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: name, displayName, password, email, avatarUrl }) });
+        alert('Conta criada!');
+        setIsRegistering(false);
+      } else {
+        const sessionData = await apiFetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: name, password, roomId }) });
+        localStorage.setItem('@Chat:User', JSON.stringify({ ...sessionData.user, password }));
+        navigate(`/${roomId}`);
+      }
+    } catch (err) { alert(err.message); } finally { setLoading(false); }
   }
+
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-slate-950 p-6">
+      <div className="w-full max-w-[440px] rounded-[2.5rem] border border-slate-800 bg-slate-900 p-8 md:p-12 shadow-2xl">
+        <h1 className="mb-2 text-center text-3xl font-black text-white">Chat Connect</h1>
+        <p className="mb-10 text-center text-xs font-bold uppercase tracking-widest text-slate-500">{isRegistering ? 'Crie sua conta' : 'Acesse uma sala'}</p>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {isRegistering && <><input type="email" placeholder="E-mail" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={email} onChange={e => setEmail(e.target.value)} /><input type="text" placeholder="Nome de Exibição" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={displayName} onChange={e => setDisplayName(e.target.value)} /></>}
+          <input type="text" placeholder="Usuário" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={name} onChange={e => setName(e.target.value)} />
+          <input type="password" placeholder="Senha" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={password} onChange={e => setPassword(e.target.value)} />
+          {!isRegistering && <input type="text" placeholder="ID da Sala" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 text-white outline-none" value={roomId} onChange={e => setRoomId(e.target.value)} />}
+          {isRegistering && <label className="flex h-32 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700 bg-slate-800"><span className="text-xs font-bold text-slate-500">{avatarFile ? avatarFile.name : 'Foto de perfil (opcional)'}</span><input type="file" className="hidden" accept="image/*" onChange={e => setAvatarFile(e.target.files[0])} /></label>}
+          <button disabled={loading} className="w-full rounded-2xl bg-indigo-600 py-5 text-sm font-black uppercase text-white shadow-xl hover:bg-indigo-500 transition-colors">{loading ? '...' : isRegistering ? 'Criar Conta' : 'Entrar'}</button>
+        </form>
+        <button onClick={() => setIsRegistering(!isRegistering)} className="mt-8 w-full text-center text-xs font-black uppercase text-indigo-400 hover:underline">{isRegistering ? 'Já tem conta? Login' : 'Não tem conta? Cadastre-se'}</button>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   return (
