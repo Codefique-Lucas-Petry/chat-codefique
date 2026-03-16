@@ -2,117 +2,24 @@ import React, { useEffect, useRef, useState, memo } from 'react';
 import { HashRouter, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://unconsenting-unwhetted-ben.ngrok-free.dev').replace(/\/+$/, '');
-const DEFAULT_HEADERS = {
-  'ngrok-skip-browser-warning': 'true',
-};
+const DEFAULT_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
-// --- UTILS ---
+// UTILS (Mantidos iguais aos originais)
+const addNgrokBypass = (url) => { if (!url) return ''; const separator = url.includes('?') ? '&' : '?'; return `${url}${separator}ngrok-skip-browser-warning=1`; };
+const formatAvatarUrl = (path) => { if (!path) return 'https://ui-avatars.com/api/?name=User&background=random'; const cleanPath = path.trim(); let url = cleanPath.startsWith('http') ? cleanPath : `${BASE_URL}${cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`}`; return addNgrokBypass(url); };
+const normalizeFileUrl = (value) => { if (!value || typeof value !== 'string') return ''; let url = value.startsWith('http') ? value : `${BASE_URL}${value.startsWith('/') ? value : `/${value}`}`; return addNgrokBypass(url); };
+const getFileExtension = (value = '') => { const cleanValue = value.split('?')[0].split('#')[0]; const parts = cleanValue.split('.'); return parts.length > 1 ? parts.pop().toLowerCase() : ''; };
+const getAttachmentKind = ({ name = '', type = '', url = '' }) => { const extension = getFileExtension(name || url); const mime = type.toLowerCase(); if (mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(extension)) return 'image'; if (mime === 'application/pdf' || extension === 'pdf') return 'pdf'; return 'file'; };
+const formatBytes = (bytes) => { if (!Number.isFinite(bytes) || bytes <= 0) return ''; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`; return `${Math.round(bytes / 104857.6) / 10} MB`; };
+const getFileUrlFromResponse = (payload) => { if (!payload || typeof payload !== 'object') return ''; const keys = ['fileUrl', 'url', 'avatarUrl']; for (const key of keys) { if (typeof payload[key] === 'string' && payload[key]) return normalizeFileUrl(payload[key]); } return ''; };
+async function parseJsonResponse(response) { const contentType = response.headers.get('content-type') || ''; if (!contentType.toLowerCase().includes('application/json')) { const responseText = await response.text(); throw new Error(`Erro API: ${responseText.slice(0, 100)}`); } return response.json(); }
+async function apiFetch(path, options = {}) { const response = await fetch(`${BASE_URL}${path}`, { ...options, headers: { ...DEFAULT_HEADERS, ...(options.headers || {}) }, }); const data = await parseJsonResponse(response); if (!response.ok) throw new Error(data?.error || data?.message || `Erro na requisicao`); return data; }
+async function apiFetchOrDefault(path, fallbackValue) { try { return await apiFetch(path); } catch (error) { return fallbackValue; } }
 
-const addNgrokBypass = (url) => {
-  if (!url) return '';
-  const separator = url.includes('?') ? '&' : '?';
-  return `${url}${separator}ngrok-skip-browser-warning=1`;
-};
-
-const formatAvatarUrl = (path) => {
-  if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
-  const cleanPath = path.trim();
-  let url = cleanPath.startsWith('http') ? cleanPath : `${BASE_URL}${cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`}`;
-  return addNgrokBypass(url);
-};
-
-const normalizeFileUrl = (value) => {
-  if (!value || typeof value !== 'string') return '';
-  let url = value.startsWith('http') ? value : `${BASE_URL}${value.startsWith('/') ? value : `/${value}`}`;
-  return addNgrokBypass(url);
-};
-
-const getFileExtension = (value = '') => {
-  const cleanValue = value.split('?')[0].split('#')[0];
-  const parts = cleanValue.split('.');
-  return parts.length > 1 ? parts.pop().toLowerCase() : '';
-};
-
-const getAttachmentKind = ({ name = '', type = '', url = '' }) => {
-  const extension = getFileExtension(name || url);
-  const mime = type.toLowerCase();
-  if (mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(extension)) return 'image';
-  if (mime === 'application/pdf' || extension === 'pdf') return 'pdf';
-  return 'file';
-};
-
-const formatBytes = (bytes) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
-  return `${Math.round(bytes / 104857.6) / 10} MB`;
-};
-
-const getFileUrlFromResponse = (payload) => {
-  if (!payload || typeof payload !== 'object') return '';
-  const keys = ['fileUrl', 'url', 'avatarUrl'];
-  for (const key of keys) {
-    if (typeof payload[key] === 'string' && payload[key]) return normalizeFileUrl(payload[key]);
-  }
-  return '';
-};
-
-async function parseJsonResponse(response) {
-  const contentType = response.headers.get('content-type') || '';
-  if (!contentType.toLowerCase().includes('application/json')) {
-    const responseText = await response.text();
-    const snippet = responseText.slice(0, 120).replace(/\s+/g, ' ').trim();
-    throw new Error(`Resposta invalida da API (${response.status}). Esperado JSON, recebido: ${snippet || 'vazio'}`);
-  }
-  return response.json();
-}
-
-async function apiFetch(path, options = {}) {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: { ...DEFAULT_HEADERS, ...(options.headers || {}) },
-  });
-  const data = await parseJsonResponse(response);
-  if (!response.ok) throw new Error(data?.error || data?.message || `Erro na requisicao`);
-  return data;
-}
-
-async function apiFetchOrDefault(path, fallbackValue) {
-  try { return await apiFetch(path); } catch (error) { console.warn(`Falha ao carregar ${path}:`, error); return fallbackValue; }
-}
-
-// --- SHARED COMPONENTS ---
-
-function FileTypeIcon({ className = 'w-5 h-5' }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <path d="M8 3.75h6.586a2 2 0 0 1 1.414.586l3.664 3.664a2 2 0 0 1 .586 1.414V18.25A2.75 2.75 0 0 1 17.5 21h-9A2.75 2.75 0 0 1 5.75 18.25V6.5A2.75 2.75 0 0 1 8.5 3.75Z" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M14.75 3.75v4.5h4.5" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M8.75 14.25h6.5M8.75 17.25h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function MenuIcon({ className = 'w-5 h-5' }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <path d="M4.75 7.25h14.5M4.75 12h14.5M4.75 16.75h14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-const RemoteImage = memo(({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) => {
-  return (
-    <img 
-      src={src || fallbackSrc} 
-      alt={alt} 
-      className={`${className} transform-gpu`}
-      style={{ transform: 'translateZ(0)' }}
-      loading="lazy"
-      onError={(e) => { e.target.src = fallbackSrc; }}
-    />
-  );
-});
+// SHARED COMPONENTS
+function FileTypeIcon({ className = 'w-5 h-5' }) { return (<svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true"><path d="M8 3.75h6.586a2 2 0 0 1 1.414.586l3.664 3.664a2 2 0 0 1 .586 1.414V18.25A2.75 2.75 0 0 1 17.5 21h-9A2.75 2.75 0 0 1 5.75 18.25V6.5A2.75 2.75 0 0 1 8.5 3.75Z" stroke="currentColor" strokeWidth="1.5" /><path d="M14.75 3.75v4.5h4.5" stroke="currentColor" strokeWidth="1.5" /><path d="M8.75 14.25h6.5M8.75 17.25h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>); }
+function MenuIcon({ className = 'w-5 h-5' }) { return (<svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true"><path d="M4.75 7.25h14.5M4.75 12h14.5M4.75 16.75h14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>); }
+const RemoteImage = memo(({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) => (<img src={src || fallbackSrc} alt={alt} className={`${className} transform-gpu`} style={{ transform: 'translateZ(0)' }} loading="lazy" onError={(e) => { e.target.src = fallbackSrc; }} />));
 
 function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
   if (!attachment) return null;
@@ -148,25 +55,19 @@ function MessageAttachment({ fileUrl, fileName }) {
   );
 }
 
-const MessageItem = memo(({ msg, isMe }) => {
-  return (
-    <div className={`flex items-start gap-3 w-full ${isMe ? 'flex-row-reverse' : ''}`}>
-      <div className="shrink-0">
-          <RemoteImage src={formatAvatarUrl(msg.userAvatarUrl)} className="h-10 w-10 rounded-2xl object-cover shadow-lg" />
+const MessageItem = memo(({ msg, isMe }) => (
+  <div className={`flex items-start gap-3 w-full ${isMe ? 'flex-row-reverse' : ''}`}>
+    <div className="shrink-0"><RemoteImage src={formatAvatarUrl(msg.userAvatarUrl)} className="h-10 w-10 rounded-2xl object-cover shadow-lg" /></div>
+    <div className={`flex max-w-[80%] flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+      <div className={`rounded-[1.5rem] p-4 shadow-xl ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800'}`}>
+        {!isMe && <p title={msg.userName} className="mb-1 text-[10px] font-black uppercase opacity-40 truncate max-w-[150px]">{msg.userName}</p>}
+        {msg.content && <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>}
+        {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
       </div>
-      <div className={`flex max-w-[80%] flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-        <div className={`rounded-[1.5rem] p-4 shadow-xl ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800'}`}>
-          {!isMe && <p title={msg.userName} className="mb-1 text-[10px] font-black uppercase opacity-40 truncate max-w-[150px]">{msg.userName}</p>}
-          {msg.content && <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>}
-          {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
-        </div>
-        <span className="mt-1 text-[9px] font-black uppercase opacity-30">{msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
-      </div>
+      <span className="mt-1 text-[9px] font-black uppercase opacity-30">{msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
     </div>
-  );
-});
-
-// --- MAIN PAGES ---
+  </div>
+));
 
 function ChatRoom() {
   const { roomId } = useParams();
@@ -180,29 +81,27 @@ function ChatRoom() {
   const [sendingAttachment, setSendingAttachment] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  
+  // ESTADOS DE PERFIL ATUALIZADOS
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [oldPassword, setOldPassword] = useState(''); // <--- NOVO
   const [newAvatarFile, setNewAvatarFile] = useState(null);
   const [updatingProfile, setUpdatingProfile] = useState(false);
+  
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const avatarInputRef = useRef(null);
-  
-  // FIX: Track if it's the first time messages are loaded for this room
   const isFirstLoad = useRef(true);
 
-  // FIX: Enhanced Scroll Effect
   useEffect(() => {
     if (messages.length > 0) {
-      // Use instant scroll for entry, smooth scroll for new messages
       const behavior = isFirstLoad.current ? 'auto' : 'smooth';
-      
       const timer = setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior });
-        isFirstLoad.current = false; // After first scroll, switch to smooth
+        isFirstLoad.current = false;
       }, 100);
-
       return () => clearTimeout(timer);
     }
   }, [messages]);
@@ -210,16 +109,14 @@ function ChatRoom() {
   useEffect(() => {
     if (user) {
       setNewDisplayName(user.displayName || '');
-      setNewPassword(user.password || '');
+      setNewPassword(''); // Sempre limpar ao abrir
+      setOldPassword(''); // Sempre limpar ao abrir
     }
   }, [isSettingsOpen]);
 
   useEffect(() => {
     if (!user) { navigate('/'); return; }
-    
-    // Reset first load flag when room changes
     isFirstLoad.current = true;
-
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return;
 
     async function startChat() {
@@ -259,6 +156,11 @@ function ChatRoom() {
 
   async function handleUpdateProfile(e) {
     e.preventDefault();
+    if (newPassword && !oldPassword) {
+        alert("Você precisa digitar a senha atual para definir uma nova.");
+        return;
+    }
+
     setUpdatingProfile(true);
     try {
       let avatarUrl = user.avatarUrl;
@@ -269,17 +171,32 @@ function ChatRoom() {
         const uploadData = await parseJsonResponse(uploadRes);
         avatarUrl = uploadData.avatarUrl;
       }
+
       const updated = await apiFetch('/users/update', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: myUserId, displayName: newDisplayName, password: newPassword, avatarUrl })
+        body: JSON.stringify({ 
+            userId: myUserId, 
+            displayName: newDisplayName, 
+            password: newPassword || undefined, 
+            oldPassword: oldPassword || undefined,
+            avatarUrl 
+        })
       });
-      const updatedUser = { ...user, ...updated, password: newPassword };
+
+      const updatedUser = { ...user, ...updated, password: newPassword || user.password };
       setUser(updatedUser);
       localStorage.setItem('@Chat:User', JSON.stringify(updatedUser));
       setIsSettingsOpen(false);
       setNewAvatarFile(null);
-    } catch (err) { alert(err.message); } finally { setUpdatingProfile(false); }
+      setNewPassword('');
+      setOldPassword('');
+      alert("Perfil atualizado com sucesso!");
+    } catch (err) { 
+        alert(err.message); 
+    } finally { 
+        setUpdatingProfile(false); 
+    }
   }
 
   async function sendMessage(event) {
@@ -378,14 +295,23 @@ function ChatRoom() {
                   <input type="file" className="hidden" ref={avatarInputRef} accept="image/*" onChange={e => setNewAvatarFile(e.target.files[0])} />
                 </div>
               </div>
+              
               <div className="space-y-1">
                 <label className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Nome de Exibição</label>
                 <input type="text" maxLength={30} className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 outline-none focus:ring-2 focus:ring-indigo-500" value={newDisplayName} onChange={e => setNewDisplayName(e.target.value)} />
               </div>
+
+              {/* CAMPOS DE SENHA ATUALIZADOS */}
+              <div className="space-y-1">
+                <label className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Senha Atual</label>
+                <input type="password" placeholder="Obrigatório para mudar senha" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 outline-none focus:ring-2 focus:ring-indigo-500" value={oldPassword} onChange={e => setOldPassword(e.target.value)} />
+              </div>
+
               <div className="space-y-1">
                 <label className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Nova Senha</label>
                 <input type="password" placeholder="Mantenha vazio para não alterar" className="w-full rounded-xl border border-slate-700 bg-slate-800 p-4 outline-none focus:ring-2 focus:ring-indigo-500" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
               </div>
+
               <div className="flex gap-3 pt-4">
                 <button type="button" onClick={() => setIsSettingsOpen(false)} className="flex-1 rounded-2xl border border-slate-700 py-4 text-[10px] font-black uppercase text-slate-400 hover:bg-slate-800">Cancelar</button>
                 <button disabled={updatingProfile} className="flex-1 rounded-2xl bg-indigo-600 py-4 text-[10px] font-black uppercase text-white hover:bg-indigo-500 disabled:opacity-50">{updatingProfile ? 'Salvando...' : 'Salvar'}</button>
