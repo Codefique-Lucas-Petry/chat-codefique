@@ -8,31 +8,26 @@ const DEFAULT_HEADERS = {
 
 // --- UTILS ---
 
-const formatAvatarUrl = (path) => {
-  if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
-  const cleanPath = path.trim();
-  let url = '';
-  if (cleanPath.startsWith('http')) {
-    url = cleanPath;
-  } else {
-    const pathWithSlash = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
-    url = `${BASE_URL}${pathWithSlash}`;
-  }
+/**
+ * Ensures all URLs have the ngrok bypass parameter
+ */
+const addNgrokBypass = (url) => {
+  if (!url) return '';
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}ngrok-skip-browser-warning=1`;
 };
 
+const formatAvatarUrl = (path) => {
+  if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
+  const cleanPath = path.trim();
+  let url = cleanPath.startsWith('http') ? cleanPath : `${BASE_URL}${cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`}`;
+  return addNgrokBypass(url);
+};
+
 const normalizeFileUrl = (value) => {
   if (!value || typeof value !== 'string') return '';
-  let url = '';
-  if (value.startsWith('http')) {
-    url = value;
-  } else {
-    const pathWithSlash = value.startsWith('/') ? value : `/${value}`;
-    url = `${BASE_URL}${pathWithSlash}`;
-  }
-  const separator = url.includes('?') ? '&' : '?';
-  return `${url}${separator}ngrok-skip-browser-warning=1`;
+  let url = value.startsWith('http') ? value : `${BASE_URL}${value.startsWith('/') ? value : `/${value}`}`;
+  return addNgrokBypass(url);
 };
 
 const getFileExtension = (value = '') => {
@@ -110,43 +105,28 @@ function MenuIcon({ className = 'w-5 h-5' }) {
 }
 
 /**
- * RemoteImage: Memoized to prevent GIFs from restarting when the user types.
+ * RemoteImage simplified. Using Blob URLs for GIFs is what causes the "stuttering".
+ * Using native URLs with the ngrok-skip-browser-warning parameter is more stable.
  */
-const RemoteImage = memo(function RemoteImage({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) {
-  const [resolvedSrc, setResolvedSrc] = useState(fallbackSrc);
-  const lastSrcRef = useRef(null);
-
-  useEffect(() => {
-    if (!src) { setResolvedSrc(fallbackSrc); return; }
-    if (src === lastSrcRef.current) return; // Prevent reload if src hasn't changed
-    
-    lastSrcRef.current = src;
-    let active = true;
-    let objectUrl = '';
-
-    async function loadImage() {
-      try {
-        const response = await fetch(src, { headers: DEFAULT_HEADERS });
-        if (!response.ok) throw new Error(`Status: ${response.status}`);
-        const blob = await response.blob();
-        objectUrl = URL.createObjectURL(blob);
-        if (active) setResolvedSrc(objectUrl);
-      } catch { if (active) setResolvedSrc(fallbackSrc); }
-    }
-    loadImage();
-    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [fallbackSrc, src]);
-
-  return <img src={resolvedSrc} alt={alt} className={className} loading="lazy" />;
+const RemoteImage = memo(({ src, alt, className = '', fallbackSrc = 'https://ui-avatars.com/api/?name=User&background=random' }) => {
+  return (
+    <img 
+      src={src || fallbackSrc} 
+      alt={alt} 
+      className={`${className} transform-gpu`} // force hardware acceleration
+      style={{ transform: 'translateZ(0)' }}   // fixes GIF pausing in Chrome
+      loading="lazy"
+      onError={(e) => { e.target.src = fallbackSrc; }}
+    />
+  );
 });
 
 function AttachmentPreviewCard({ attachment, onRemove, compact = false }) {
   if (!attachment) return null;
   const kind = getAttachmentKind(attachment);
   const previewUrl = attachment.previewUrl || attachment.url;
-  const wrapperClass = compact ? 'rounded-[1.5rem] border border-slate-700/60 bg-slate-900/80 p-3' : 'rounded-[1.75rem] border border-slate-700/60 bg-slate-900/80 p-3 sm:p-4';
   return (
-    <div className={wrapperClass}>
+    <div className={compact ? 'rounded-[1.5rem] border border-slate-700/60 bg-slate-900/80 p-3' : 'rounded-[1.75rem] border border-slate-700/60 bg-slate-900/80 p-3 sm:p-4'}>
       {kind === 'image' && <img src={previewUrl} alt="Preview" className={`w-full rounded-[1.25rem] object-cover ${compact ? 'max-h-32' : 'max-h-44'}`} />}
       {kind === 'pdf' && (
         <div className="flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-3 sm:p-4">
@@ -175,10 +155,6 @@ function MessageAttachment({ fileUrl, fileName }) {
   );
 }
 
-/**
- * MessageItem: Individual message component.
- * Memoized so that typing in the chat room doesn't re-render existing messages.
- */
 const MessageItem = memo(({ msg, isMe }) => {
   return (
     <div className={`flex items-start gap-3 w-full ${isMe ? 'flex-row-reverse' : ''}`}>
@@ -202,10 +178,7 @@ const MessageItem = memo(({ msg, isMe }) => {
 function ChatRoom() {
   const { roomId } = useParams();
   const navigate = useNavigate();
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('@Chat:User');
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('@Chat:User') || 'null'));
   const [messages, setMessages] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [inputValue, setInputValue] = useState('');
@@ -227,16 +200,10 @@ function ChatRoom() {
 
   useEffect(() => {
     if (user) {
-        setNewDisplayName(user.displayName || '');
-        setNewPassword(user.password || '');
+      setNewDisplayName(user.displayName || '');
+      setNewPassword(user.password || '');
     }
-  }, [user]);
-
-  useEffect(() => {
-    if (user && myUserId) {
-        setMessages(prev => prev.map(m => String(m.userId) === String(myUserId) ? { ...m, userName: user.displayName, userAvatarUrl: user.avatarUrl } : m));
-    }
-  }, [user?.displayName, user?.avatarUrl, myUserId]);
+  }, [isSettingsOpen]); // Only reset when opening settings
 
   useEffect(() => {
     if (!user) { navigate('/'); return; }
@@ -256,30 +223,26 @@ function ChatRoom() {
         ]);
         setMessages(history.messages || []);
         setParticipants(parts.participants || []);
+        
         const socket = new WebSocket(sessionData.wsUrl);
         socketRef.current = socket;
         socket.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          switch (data.type) {
-            case 'room.joined': setParticipants(data.participants || []); break;
-            case 'message.new': setMessages((prev) => [...prev, data.message]); break;
-            case 'participant.status_change':
-              setParticipants((prev) => {
-                const exists = prev.find(p => String(p.id) === String(data.participantId));
-                if (exists) return prev.map(p => String(p.id) === String(data.participantId) ? { ...p, ...data.participant, status: data.status } : p);
-                return data.participant ? [...prev, { ...data.participant, status: data.status }] : prev;
-              });
-              if (data.participant) {
-                setMessages(prev => prev.map(m => String(m.userId) === String(data.participantId) ? { ...m, userName: data.participant.displayName, userAvatarUrl: data.participant.avatarUrl } : m));
-              }
-              break;
+          if (data.type === 'room.joined') setParticipants(data.participants || []);
+          if (data.type === 'message.new') setMessages((prev) => [...prev, data.message]);
+          if (data.type === 'participant.status_change') {
+            setParticipants(prev => {
+              const exists = prev.find(p => String(p.id) === String(data.participantId));
+              if (exists) return prev.map(p => String(p.id) === String(data.participantId) ? { ...p, ...data.participant, status: data.status } : p);
+              return data.participant ? [...prev, { ...data.participant, status: data.status }] : prev;
+            });
           }
         };
       } catch (err) { console.error(err); }
     }
     startChat();
-    return () => { };
-  }, [navigate, roomId]);
+    return () => { if (socketRef.current) socketRef.current.close(); };
+  }, [roomId]); // Minimal dependency to prevent reconnects
 
   async function handleUpdateProfile(e) {
     e.preventDefault();
@@ -332,11 +295,7 @@ function ChatRoom() {
       <div className={`absolute inset-0 z-30 bg-slate-950/70 backdrop-blur-sm transition-opacity md:hidden ${sidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`} onClick={() => setSidebarOpen(false)} />
 
       <aside className={`absolute inset-y-0 left-0 z-40 flex w-80 flex-col border-r border-slate-800 bg-slate-900 transition-transform md:static md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="border-b border-slate-800 p-6">
-          <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2>
-          <p className="text-xl font-black text-white truncate">#{roomId}</p>
-        </div>
-
+        <div className="border-b border-slate-800 p-6"><h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2><p className="text-xl font-black text-white truncate">#{roomId}</p></div>
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Participantes ({participants.length})</p>
           <div className="space-y-4">
@@ -347,16 +306,13 @@ function ChatRoom() {
                   <div className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-slate-900 ${p.status === 'online' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
                 </div>
                 <div className="flex flex-col min-w-0 flex-1">
-                  <span title={p.displayName || p.username} className={`truncate text-sm font-bold ${String(p.id) === String(myUserId) ? 'text-indigo-400' : 'text-slate-200'}`}>
-                    {p.displayName || p.username}
-                  </span>
+                  <span className={`truncate text-sm font-bold ${String(p.id) === String(myUserId) ? 'text-indigo-400' : 'text-slate-200'}`}>{p.displayName || p.username}</span>
                   <span className="text-[9px] font-black uppercase opacity-50">{p.status}</span>
                 </div>
               </div>
             ))}
           </div>
         </div>
-
         <div className="p-6 space-y-2 border-t border-slate-800">
           <button onClick={() => setIsSettingsOpen(true)} className="w-full rounded-xl bg-slate-800 py-3 text-[10px] font-black uppercase hover:bg-slate-700">Editar Perfil</button>
           <button onClick={() => { socketRef.current?.close(); localStorage.clear(); window.location.href = '/'; }} className="w-full rounded-xl bg-red-500/10 py-3 text-[10px] font-black uppercase text-red-500 hover:bg-red-500/20">Sair</button>
@@ -370,13 +326,9 @@ function ChatRoom() {
           <div className="w-10" />
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
-          {messages.map((msg, idx) => (
-            <MessageItem 
-                key={msg.id || idx} 
-                msg={msg} 
-                isMe={String(msg.userId) === String(myUserId)} 
-            />
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 scroll-smooth">
+          {messages.map((msg) => (
+            <MessageItem key={msg.id} msg={msg} isMe={String(msg.userId) === String(myUserId)} />
           ))}
           <div ref={messagesEndRef} />
         </div>
@@ -409,9 +361,7 @@ function ChatRoom() {
               <div className="flex flex-col items-center gap-4 mb-4">
                 <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
                   <RemoteImage src={newAvatarFile ? URL.createObjectURL(newAvatarFile) : formatAvatarUrl(user.avatarUrl)} className="h-24 w-24 rounded-[2rem] object-cover ring-4 ring-slate-800 group-hover:opacity-50 transition-opacity" />
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <span className="text-[10px] font-black uppercase">Trocar</span>
-                  </div>
+                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><span className="text-[10px] font-black uppercase">Trocar</span></div>
                   <input type="file" className="hidden" ref={avatarInputRef} accept="image/*" onChange={e => setNewAvatarFile(e.target.files[0])} />
                 </div>
               </div>
@@ -425,9 +375,7 @@ function ChatRoom() {
               </div>
               <div className="flex gap-3 pt-4">
                 <button type="button" onClick={() => setIsSettingsOpen(false)} className="flex-1 rounded-2xl border border-slate-700 py-4 text-[10px] font-black uppercase text-slate-400 hover:bg-slate-800">Cancelar</button>
-                <button disabled={updatingProfile} className="flex-1 rounded-2xl bg-indigo-600 py-4 text-[10px] font-black uppercase text-white hover:bg-indigo-500 disabled:opacity-50">
-                  {updatingProfile ? 'Salvando...' : 'Salvar'}
-                </button>
+                <button disabled={updatingProfile} className="flex-1 rounded-2xl bg-indigo-600 py-4 text-[10px] font-black uppercase text-white hover:bg-indigo-500 disabled:opacity-50">{updatingProfile ? 'Salvando...' : 'Salvar'}</button>
               </div>
             </form>
           </div>
