@@ -12,6 +12,8 @@
     '/uploads/chat',
     '/uploads/avatar',
   ];
+  const INITIAL_VISIBLE_MESSAGES = 50;
+  const LOAD_MORE_MESSAGES_STEP = 50;
 
   const formatAvatarUrl = (path) => {
     if (!path) return 'https://ui-avatars.com/api/?name=User&background=random';
@@ -220,8 +222,8 @@
     const kind = getAttachmentKind(attachment);
     const previewUrl = attachment.previewUrl || attachment.url;
     const wrapperClass = compact
-      ? 'rounded-[1 .5rem] border border-slate-700/60 bg-slate-900/80 p-3'
-      : 'rounded-[1.75rem] border border-slate-700/60 bg-slate-900/80 p-4';
+      ? 'rounded-[1.5rem] border border-slate-700/60 bg-slate-900/80 p-3'
+      : 'rounded-[1.75rem] border border-slate-700/60 bg-slate-900/80 p-3 sm:p-4';
 
     return (
       <div className={wrapperClass}>
@@ -234,7 +236,7 @@
         )}
 
         {kind === 'pdf' && (
-          <div className={`flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-4 ${compact ? 'min-h-24' : 'min-h-28'}`}>
+          <div className={`flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-3 sm:p-4 ${compact ? 'min-h-24' : 'min-h-28'}`}>
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-500/15 text-red-300">
               <span className="text-xs font-black uppercase tracking-widest">PDF</span>
             </div>
@@ -256,11 +258,11 @@
         )}
 
         {kind === 'file' && (
-          <div className="flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-4">
+          <div className="flex items-center gap-3 rounded-[1.25rem] border border-slate-700/60 bg-slate-800/80 p-3 sm:p-4">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-700 text-slate-200">
               <FileTypeIcon className="w-6 h-6" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-bold text-slate-100">{attachment.name || 'Arquivo'}</p>
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
                 {attachment.type || getFileExtension(attachment.name || attachment.url) || 'Arquivo'}
@@ -269,7 +271,7 @@
           </div>
         )}
 
-        <div className="mt-3 flex items-center justify-between gap-3">
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-100">{attachment.name || 'Anexo'}</p>
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{formatBytes(attachment.size)}</p>
@@ -341,7 +343,7 @@
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-700 text-slate-200">
           <FileTypeIcon className="w-6 h-6" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold">{fileName || 'Arquivo anexado'}</p>
           <p className="text-[10px] font-black uppercase tracking-widest opacity-50">Abrir arquivo</p>
         </div>
@@ -365,6 +367,7 @@
     const [attachment, setAttachment] = useState(null);
     const [sendingAttachment, setSendingAttachment] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [visibleMessagesCount, setVisibleMessagesCount] = useState(INITIAL_VISIBLE_MESSAGES);
 
     const socketRef = useRef(null);
     const messagesEndRef = useRef(null);
@@ -410,6 +413,7 @@
             apiFetchOrDefault(`/rooms/${roomId}/participants`, { participants: [] }),
           ]);
           setMessages(historyData.messages || []);
+          setVisibleMessagesCount(INITIAL_VISIBLE_MESSAGES);
           setParticipants(partData.participants || []);
 
           const socket = new WebSocket(sessionData.wsUrl);
@@ -425,6 +429,7 @@
 
               case 'message.new':
                 setMessages((prev) => [...prev, data.message]);
+                setVisibleMessagesCount((prev) => prev + 1);
                 break;
 
               case 'participant.status_change':
@@ -468,6 +473,13 @@
     useEffect(() => {
       setSidebarOpen(false);
     }, [roomId]);
+
+    const hasHiddenMessages = messages.length > visibleMessagesCount;
+    const visibleMessages = hasHiddenMessages ? messages.slice(-visibleMessagesCount) : messages;
+
+    function showMoreMessages() {
+      setVisibleMessagesCount((prev) => Math.min(prev + LOAD_MORE_MESSAGES_STEP, messages.length));
+    }
 
     function clearAttachment() {
       if (attachment?.previewUrl?.startsWith('blob:')) {
@@ -567,7 +579,7 @@
         />
 
         <aside
-          className={`absolute inset-y-0 left-0 z-40 flex w-[min(82vw,20rem)] max-w-80 flex-col border-r border-slate-800 bg-slate-900 shadow-2xl transition-transform duration-300 md:static md:w-80 md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+          className={`absolute inset-y-0 left-0 z-40 flex w-[min(84vw,20rem)] max-w-80 flex-col border-r border-slate-800 bg-slate-900 shadow-2xl transition-transform duration-300 md:static md:w-80 md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
         >
           <div className="border-b border-slate-800 p-5 md:p-10">
             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sala Ativa</h2>
@@ -641,8 +653,20 @@
             </div>
           </div>
 
-          <div className="flex-1 space-y-5 overflow-y-auto px-3 py-4 sm:px-4 md:space-y-8 md:p-8 xl:p-12">
-            {messages.map((msg, idx) => {
+          <div className="flex-1 space-y-4 overflow-y-auto px-3 py-4 sm:px-4 md:space-y-8 md:p-8 xl:p-12">
+            {hasHiddenMessages && (
+              <div className="flex justify-center pb-2">
+                <button
+                  type="button"
+                  onClick={showMoreMessages}
+                  className="rounded-full border border-slate-700 bg-slate-900/80 px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-slate-300 transition hover:border-slate-500 hover:text-white"
+                >
+                  Carregar anteriores
+                </button>
+              </div>
+            )}
+
+            {visibleMessages.map((msg, idx) => {
               const isMe = msg.userId === myUserId;
 
               return (
@@ -652,12 +676,12 @@
                     className="h-10 w-10 shrink-0 rounded-2xl border border-slate-800 object-cover shadow-2xl md:h-12 md:w-12"
                     alt={msg.userName || 'Avatar'}
                   />
-                  <div className={`flex max-w-[85%] flex-col sm:max-w-[78%] md:max-w-[65%] ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex min-w-0 max-w-[88%] flex-col sm:max-w-[78%] md:max-w-[65%] ${isMe ? 'items-end' : 'items-start'}`}>
                     <div
-                      className={`w-full rounded-[1.5rem] px-3 py-3 shadow-2xl md:rounded-[2rem] md:px-4 md:py-4 ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800 text-slate-100'}`}
+                      className={`w-full min-w-0 rounded-[1.5rem] px-3 py-3 shadow-2xl md:rounded-[2rem] md:px-4 md:py-4 ${isMe ? 'rounded-tr-none bg-indigo-600 text-white' : 'rounded-tl-none border border-slate-700/50 bg-slate-800 text-slate-100'}`}
                     >
                       {!isMe && <p className="mb-1 text-[10px] font-black uppercase tracking-widest opacity-40">{msg.userName}</p>}
-                      {msg.content && <p className="text-sm font-medium leading-relaxed md:text-base">{msg.content}</p>}
+                      {msg.content && <p className="break-words text-sm font-medium leading-relaxed md:text-base">{msg.content}</p>}
                       {msg.fileUrl && <MessageAttachment fileUrl={msg.fileUrl} fileName={msg.fileName} />}
                     </div>
                     <span className="mt-2 px-2 text-[9px] font-black uppercase tracking-widest text-slate-600">
@@ -710,7 +734,7 @@
 
                 <button
                   disabled={sendingAttachment}
-                  className="rounded-[1.2rem] bg-indigo-600 px-4 py-3 text-[10px] font-black tracking-widest text-white transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 hover:bg-indigo-500 md:rounded-[1.5rem] md:px-8 md:py-4"
+                  className="shrink-0 rounded-[1.2rem] bg-indigo-600 px-4 py-3 text-[10px] font-black tracking-widest text-white transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 hover:bg-indigo-500 md:rounded-[1.5rem] md:px-8 md:py-4"
                 >
                   <span className="hidden sm:inline">{sendingAttachment ? 'ENVIANDO...' : 'ENVIAR'}</span>
                   <span className="sm:hidden">{sendingAttachment ? '...' : 'OK'}</span>
@@ -866,13 +890,13 @@
     );
   }
 
-  export default function App() {
-    return (
-      <HashRouter>
-        <Routes>
-          <Route path="/" element={<Login />} />
-          <Route path="/:roomId" element={<ChatRoom />} />
-        </Routes>
-      </HashRouter>
+export default function App() {
+  return (
+    <HashRouter>
+      <Routes>
+        <Route path="/" element={<Login />} />
+        <Route path="/:roomId" element={<ChatRoom />} />
+      </Routes>
+    </HashRouter>
   );
 }
